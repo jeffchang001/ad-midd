@@ -164,6 +164,18 @@ public class APIEmployeeInfo {
     @JsonProperty("DataModifiedUser")
     private String dataModifiedUser;
 
+    @JsonProperty("FunctionOrgPartyID")
+    private String functionOrgPartyID;
+
+    @JsonProperty("FunctionOrgCode")
+    private String functionOrgCode;
+    
+    @JsonProperty("FunctionOrgName")
+    private String functionOrgName;
+    
+    @JsonProperty("MVPN")
+    private String mvpn;
+    
     @JsonProperty("status")
     private String status;
 
