@@ -38,9 +38,9 @@ public class ADSyncController {
     @Value("${ad.sync.token}")
     private String token;
 
-    @GetMapping("/syncADData")
+    @GetMapping("/process-ad-data")
     public ResponseEntity<String> syncADData() {
-        String url = baseUrl + "/api/v1/getADSyncData";
+        String url = baseUrl + "/api/v1/ad-sync-data";
         HttpHeaders headers = new HttpHeaders();
         headers.set("Authorization", token);
 
@@ -57,8 +57,7 @@ public class ADSyncController {
         if (syncDataList != null) {
             for (ADSyncDto adSyncDto : syncDataList) {
 
-                System.out.println("adSyncDto=我打中文可以嗎?===" + adSyncDto.getOrgHierarchyDto().get(0).getOrgName());
-                logger.info(" 今天天氣很好 挖挖挖挖屋挖");
+                logger.info("adSyncDto=" + adSyncDto.getOrgHierarchyDto().get(0).getOrgName());
 
                 try {
                     adldapSyncService.syncEmployeeToLDAP(adSyncDto);

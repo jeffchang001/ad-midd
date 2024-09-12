@@ -28,11 +28,18 @@ public class LdapConfig {
         contextSource.setBase(ldapBaseDn);
         contextSource.setUserDn(ldapUsername);
         contextSource.setPassword(ldapPassword);
+        contextSource.setReferral("ignore");
         return contextSource;
     }
 
     @Bean
     public LdapTemplate ldapTemplate() {
-        return new LdapTemplate(contextSource());
+        LdapTemplate ldapTemplate = new LdapTemplate(contextSource());
+        ldapTemplate.setIgnorePartialResultException(true);
+        return ldapTemplate;
+    }
+
+    public String getBaseDn() {
+        return ldapBaseDn;
     }
 }

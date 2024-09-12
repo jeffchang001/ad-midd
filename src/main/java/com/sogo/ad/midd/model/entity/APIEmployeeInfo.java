@@ -164,8 +164,8 @@ public class APIEmployeeInfo {
     @JsonProperty("DataModifiedUser")
     private String dataModifiedUser;
 
-    @JsonProperty("FunctionOrgPartyID")
-    private String functionOrgPartyID;
+    // @JsonProperty("FunctionOrgPartyID")
+    // private String functionOrgPartyID;
 
     @JsonProperty("FunctionOrgCode")
     private String functionOrgCode;
