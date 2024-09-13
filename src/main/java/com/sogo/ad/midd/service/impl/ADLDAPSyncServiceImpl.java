@@ -379,7 +379,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
     }
 
     private void setUserPassword(LdapContext ctx, Name dn) {
-        // TODO: 需要請客戶確認 AD server 是否啟用 SSL/TLS 加密, 需要進行驗證才能正常執行
+        // TODO: 需要請客戶確認 AD server 是否啟用 SSL/TLS 加密, LDAP需要進行驗證才能正常執行; 若改用powershell方式, 可以不用 ssl, 但是部屬的時候要和該 AD 同網域, 不須登入驗證
         try {
 
             // 然後設置密碼
