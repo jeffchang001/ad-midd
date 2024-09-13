@@ -1,6 +1,9 @@
 package com.sogo.ad.midd.service.impl;
 
 import java.io.IOException;
+import java.io.UnsupportedEncodingException;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Hashtable;
 import java.util.List;
@@ -9,6 +12,7 @@ import java.util.stream.Collectors;
 
 import javax.naming.Context;
 import javax.naming.Name;
+import javax.naming.NameNotFoundException;
 import javax.naming.NamingEnumeration;
 import javax.naming.NamingException;
 import javax.naming.directory.Attribute;
@@ -70,9 +74,9 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         LdapContext ctx = null;
         switch (action) {
             case "C":
-                // logger.debug("創建新員工: {}", employee.getEmployeeNo());
-                // createEmployee(dn, employee);
-                // break;
+                logger.debug("創建新員工: {}", employee.getEmployeeNo());
+                createEmployee(dn, employee);
+                break;
             case "U":
                 logger.debug("更新員工資訊: {}", employee.getEmployeeNo());
                 ctx = getLdapContext();
@@ -96,7 +100,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         env.put(Context.SECURITY_AUTHENTICATION, "simple");
         env.put(Context.SECURITY_PRINCIPAL, ldapUsername);
         env.put(Context.SECURITY_CREDENTIALS, ldapPassword);
-        env.put(Context.REFERRAL, "ignore");
+        env.put(Context.REFERRAL, "follow");
 
         return new InitialLdapContext(env, null);
     }
@@ -127,14 +131,14 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
                 .sorted(Comparator.comparingInt(OrganizationHierarchyDto::getOrgLevel).reversed())
                 .collect(Collectors.toList());
 
-        // 建構 OU 部分
-        for (OrganizationHierarchyDto org : sortedOrgHierarchy) {
-            builder.add("OU", org.getOrgName());
-        }
-
         // 在這裡加入自定義的 OU
         if (isProductionSite == Boolean.FALSE) {
             builder.add("OU", "開發測試區");
+        }
+
+        // 建構 OU 部分
+        for (OrganizationHierarchyDto org : sortedOrgHierarchy) {
+            builder.add("OU", org.getOrgName());
         }
 
         // 添加 CN
@@ -228,11 +232,15 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         }
     }
 
-    private void createEmployee(Name dn, APIEmployeeInfo employee) throws NamingException {
+    private void createEmployee(Name dn, APIEmployeeInfo employee) throws Exception {
         LdapContext ctx = null;
         try {
             ctx = getLdapContext();
 
+            // 確保所有父 OU 存在
+            // ensureOUStructure(ctx, dn);
+
+            // 創建用戶屬性
             Attributes attrs = new BasicAttributes();
             Attribute objectClass = new BasicAttribute("objectClass");
             objectClass.add("top");
@@ -241,30 +249,29 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
             objectClass.add("user");
             attrs.put(objectClass);
 
-            attrs.put("cn", employee.getEmployeeNo());
-            attrs.put("sAMAccountName", employee.getEmployeeNo());
-            attrs.put("displayName", employee.getFullName());
-            attrs.put("givenName", employee.getFullName());
-            attrs.put("mail", employee.getEmailAddress());
-            attrs.put("telephoneNumber", employee.getOfficePhone());
-            attrs.put("mobile", employee.getMobilePhoneNo());
-            attrs.put("title", employee.getJobTitleName());
+            // 添加其他屬性
+            addAttributeIfNotNull(attrs, "cn", employee.getEmployeeNo());
+            addAttributeIfNotNull(attrs, "sAMAccountName", employee.getEmployeeNo());
+            addAttributeIfNotNull(attrs, "userPrincipalName", employee.getEmployeeNo() + "@sogo.com.tw");
+            addAttributeIfNotNull(attrs, "displayName", employee.getFullName());
+            addAttributeIfNotNull(attrs, "mail", employee.getEmployeeNo() + "@sogo.com.tw");
+            addAttributeIfNotNull(attrs, "telephoneNumber", employee.getOfficePhone());
+            addAttributeIfNotNull(attrs, "mobile", employee.getMobilePhoneNo());
+            addAttributeIfNotNull(attrs, "title", employee.getJobTitleName());
 
-            // 設置預設密碼，建議使用隨機生成的強密碼
-            String defaultPassword = generateRandomPassword();
-            attrs.put("userPassword", defaultPassword);
-
+            // 創建用戶
             ctx.createSubcontext(dn, attrs);
-
             logger.info("成功創建 LDAP 帳號: {}", dn);
 
-            // 啟用帳號
-            ModificationItem[] mods = new ModificationItem[1];
-            mods[0] = new ModificationItem(DirContext.REPLACE_ATTRIBUTE,
-                    new BasicAttribute("userAccountControl", "512"));
-            ctx.modifyAttributes(dn, mods);
+            // 添加 proxyAddresses
+            addProxyAddresses(ctx, dn, employee);
 
-            logger.info("成功啟用 LDAP 帳號: {}", dn);
+            // 啟用帳號
+            enableAccount(ctx, dn);
+
+            // 設置密碼
+            setUserPassword(ctx, dn);
+
         } finally {
             if (ctx != null) {
                 ctx.close();
@@ -272,30 +279,157 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         }
     }
 
-    private String generateRandomPassword() {
-        // TODO: 預設密碼policy為「Sogo$身份證後四碼」, 身分證的部分要等 Radar 改版後取得APIEmployeeInfo.IDNo
-        return "TempPass" + System.currentTimeMillis();
+    private void addAttributeIfNotNull(Attributes attrs, String attrName, String value) {
+        if (value != null && !value.trim().isEmpty()) {
+            attrs.put(attrName, value.trim());
+        }
     }
 
+    private void ensureOUStructure(LdapContext ctx, Name dn) throws NamingException {
+        List<String> ouList = new ArrayList<>();
+
+        // 從 DN 中提取所有 OU
+        for (int i = 0; i < dn.size(); i++) {
+            String rdn = dn.get(i);
+            if (rdn.startsWith("OU=") || rdn.startsWith("ou=")) {
+                ouList.add(rdn.substring(3)); // 移除 "OU=" 前綴
+            }
+        }
+
+        // 反轉 OU 列表,使其從最上層開始
+        // Collections.reverse(ouList);
+        logger.info("OU 列表: {}", ouList);
+
+        // 構建基礎 DN
+        Name baseDn = new LdapName(ldapBaseDn);
+
+        // 從最上層 OU 開始創建
+        for (String ou : ouList) {
+            baseDn.add(0, "OU=" + ou);
+            try {
+                ctx.lookup(baseDn);
+                logger.debug("OU 已存在: {}", baseDn);
+            } catch (NameNotFoundException e) {
+                // 如果 OU 不存在,創建它
+                Attributes ouAttrs = new BasicAttributes();
+                Attribute ouObjectClass = new BasicAttribute("objectClass");
+                ouObjectClass.add("top");
+                ouObjectClass.add("organizationalUnit");
+                ouAttrs.put(ouObjectClass);
+                ouAttrs.put("ou", ou);
+
+                try {
+                    ctx.createSubcontext(baseDn, ouAttrs);
+                    logger.info("成功創建組織單位: {}", baseDn);
+                } catch (NamingException ne) {
+                    logger.error("創建組織單位時發生錯誤: {}", baseDn, ne);
+                    throw ne;
+                }
+            } catch (NamingException ne) {
+                logger.error("檢查 OU 結構時發生未知錯誤: {}", baseDn, ne);
+                throw ne;
+            }
+        }
+    }
+
+    private void addProxyAddresses(LdapContext ctx, Name dn, APIEmployeeInfo employee) throws NamingException {
+        ModificationItem[] proxyMods = new ModificationItem[1];
+        Attribute proxyAddresses = new BasicAttribute("proxyAddresses");
+        proxyAddresses.add("SMTP:" + employee.getEmployeeNo() + "@sogo.com.tw");
+        proxyAddresses.add("smtp:" + employee.getEmployeeNo() + "@mail.sogo.com.tw");
+        proxyAddresses.add("smtp:" + employee.getEmployeeNo() + "@gardencity.com.tw");
+        proxyMods[0] = new ModificationItem(DirContext.ADD_ATTRIBUTE, proxyAddresses);
+
+        ctx.modifyAttributes(dn, proxyMods);
+        logger.info("成功新增 proxyAddresses 屬性: {}", dn);
+    }
+
+    private void enableAccount(LdapContext ctx, Name dn) throws NamingException {
+        try {
+            // 檢查當前帳號狀態
+            Attributes attrs = ctx.getAttributes(dn, new String[] { "userAccountControl" });
+            String currentUAC = attrs.get("userAccountControl").get().toString();
+            logger.info("當前帳號狀態 (UAC): {}", currentUAC);
+
+            int uacValue = Integer.parseInt(currentUAC);
+            int newUacValue = (uacValue & ~2) | 512; // 移除 "停用" 標記，添加 "正常帳戶" 標記
+            logger.info("新的 UAC 值: {}", newUacValue);
+
+            // 更新 UAC 值
+            ModificationItem[] mods = new ModificationItem[1];
+            mods[0] = new ModificationItem(DirContext.REPLACE_ATTRIBUTE,
+                    new BasicAttribute("userAccountControl", Integer.toString(newUacValue)));
+            ctx.modifyAttributes(dn, mods);
+            logger.info("成功更新 UAC 值");
+
+            // 驗證最終帳號狀態
+            attrs = ctx.getAttributes(dn, new String[] { "userAccountControl" });
+            String finalUAC = attrs.get("userAccountControl").get().toString();
+            logger.info("最終帳號狀態 (UAC): {}", finalUAC);
+
+            if (Integer.parseInt(finalUAC) == newUacValue) {
+                logger.info("成功啟用 LDAP 帳號: {}", dn);
+            } else {
+                logger.warn("帳號可能未完全啟用，最終 userAccountControl 值: {}", finalUAC);
+            }
+        } catch (NamingException e) {
+            logger.error("啟用帳號時發生錯誤: {}, 錯誤: {}", dn, e.getMessage());
+            throw e;
+        }
+    }
+
+    private void setUserPassword(LdapContext ctx, Name dn) {
+        // TODO: 需要請客戶確認 AD server 是否啟用 SSL/TLS 加密, 需要進行驗證才能正常執行
+        try {
+
+            // 然後設置密碼
+            String newPassword = generateRandomPassword();
+
+            // 密碼必須以 UTF-16LE 格式，並且包圍在雙引號內
+            String quotedPassword = "\"" + newPassword + "\"";
+            byte[] passwordBytes = quotedPassword.getBytes("UTF-16LE");
+
+            ModificationItem[] mods = new ModificationItem[1];
+            mods[0] = new ModificationItem(DirContext.REPLACE_ATTRIBUTE,
+                    new BasicAttribute("unicodePwd", passwordBytes));
+
+            ctx.modifyAttributes(dn, mods);
+            logger.info("成功設置新密碼");
+
+            // 最後,如果需要,移除 PASSWD_NOTREQD 標誌
+            ModificationItem[] uacMods = new ModificationItem[1];
+            uacMods[0] = new ModificationItem(DirContext.REPLACE_ATTRIBUTE,
+                    new BasicAttribute("userAccountControl", "512")); // 512 (NORMAL_ACCOUNT)
+            ctx.modifyAttributes(dn, uacMods);
+
+        } catch (NamingException | UnsupportedEncodingException e) {
+            logger.error("設置密碼時發生錯誤: {}", e.getMessage());
+        }
+    }
+
+    private String generateRandomPassword() {
+        // TODO: 預設密碼policy為「Sogo$身份證後四碼」, 身分證的部分要等 Radar 改版後取得APIEmployeeInfo.IDNo
+        return "Sogo$6018";
+    }
 
     private void disableEmployee(Name dn) throws NamingException {
         LdapContext ctx = null;
         try {
             ctx = getLdapContext();
-            
+
             // 停用帳號
             ModificationItem[] mods = new ModificationItem[1];
-            mods[0] = new ModificationItem(DirContext.REPLACE_ATTRIBUTE, 
-                         new BasicAttribute("userAccountControl", "514"));
+            mods[0] = new ModificationItem(DirContext.REPLACE_ATTRIBUTE,
+                    new BasicAttribute("userAccountControl", "514"));
             ctx.modifyAttributes(dn, mods);
-            
+
             logger.info("成功停用 LDAP 帳號: {}", dn);
-            
+
             // 可選：移動到停用的 OU
             // Name newDn = LdapNameBuilder.newInstance(ldapBaseDn)
-            //     .add("OU", "Disabled Accounts")
-            //     .add(dn.get(dn.size() - 1))
-            //     .build();
+            // .add("OU", "Disabled Accounts")
+            // .add(dn.get(dn.size() - 1))
+            // .build();
             // ctx.rename(dn, newDn);
             // logger.info("已將停用的帳號移動到 Disabled Accounts OU: {}", newDn);
         } finally {
