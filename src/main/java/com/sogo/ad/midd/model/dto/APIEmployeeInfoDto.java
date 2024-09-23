@@ -6,11 +6,9 @@ import java.util.Map;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.sogo.ad.midd.model.entity.APIEmployeeInfo;
 
-import lombok.Getter;
-import lombok.Setter;
+import lombok.Data;
 
-@Getter
-@Setter
+@Data
 public class APIEmployeeInfoDto {
 @JsonProperty("HttpStatusCode")
     private int httpStatusCode;

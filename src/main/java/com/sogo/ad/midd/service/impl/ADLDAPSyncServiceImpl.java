@@ -2,7 +2,6 @@ package com.sogo.ad.midd.service.impl;
 
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Hashtable;
@@ -30,8 +29,6 @@ import javax.naming.ldap.LdapName;
 import javax.naming.ldap.PagedResultsControl;
 import javax.naming.ldap.PagedResultsResponseControl;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.ldap.support.LdapNameBuilder;
 import org.springframework.stereotype.Service;
@@ -41,10 +38,11 @@ import com.sogo.ad.midd.model.dto.OrganizationHierarchyDto;
 import com.sogo.ad.midd.model.entity.APIEmployeeInfo;
 import com.sogo.ad.midd.service.ADLDAPSyncService;
 
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
 @Service
 public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
-
-    private static final Logger logger = LoggerFactory.getLogger(ADLDAPSyncServiceImpl.class);
 
     @Value("${ldap.url}")
     private String ldapUrl;
@@ -63,34 +61,34 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
 
     @Override
     public void syncEmployeeToLDAP(ADSyncDto employeeData) throws Exception {
-        logger.info("employeeNo: {}", employeeData.getEmployeeNo());
+        log.info("employeeNo: {}", employeeData.getEmployeeNo());
         APIEmployeeInfo employee = employeeData.getEmployeeInfo();
         String action = employeeData.getAction();
         List<OrganizationHierarchyDto> orgHierarchy = employeeData.getOrgHierarchyDto();
 
         Name dn = buildEmployeeDn(employee.getEmployeeNo(), orgHierarchy);
-        logger.info("HR 組織樹的 DN: " + dn.toString());
+        log.info("HR 組織樹的 DN: " + dn.toString());
 
         LdapContext ctx = null;
         switch (action) {
             case "C":
-                logger.debug("創建新員工: {}", employee.getEmployeeNo());
+                log.debug("創建新員工: {}", employee.getEmployeeNo());
                 createEmployee(dn, employee);
                 break;
             case "U":
-                logger.debug("更新員工資訊: {}", employee.getEmployeeNo());
+                log.debug("更新員工資訊: {}", employee.getEmployeeNo());
                 ctx = getLdapContext();
                 updateEmployee(ctx, employee, employeeData.getUpdatedFields());
                 break;
             case "D":
-                logger.debug("停用員工: {}", employee.getEmployeeNo());
+                log.debug("停用員工: {}", employee.getEmployeeNo());
                 disableEmployee(dn);
                 break;
             default:
-                logger.error("未知的操作類型: {}", action);
+                log.error("未知的操作類型: {}", action);
                 throw new IllegalArgumentException("Unknown action: " + action);
         }
-        logger.info("完成同步員工資訊到 LDAP, 員工編號: {}", employeeData.getEmployeeNo());
+        log.info("完成同步員工資訊到 LDAP, 員工編號: {}", employeeData.getEmployeeNo());
     }
 
     private LdapContext getLdapContext() throws NamingException {
@@ -162,7 +160,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
             searchControls.setReturningAttributes(returnedAtts);
 
             String searchFilter = String.format("(&(objectClass=person)(cn=%s))", employee.getEmployeeNo());
-            logger.debug("LDAP 搜索過濾器: {}", searchFilter);
+            log.debug("LDAP 搜索過濾器: {}", searchFilter);
 
             do {
                 NamingEnumeration<SearchResult> results = ctx.search(ldapBaseDn, searchFilter, searchControls);
@@ -170,7 +168,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
                 while (results != null && results.hasMoreElements()) {
                     SearchResult searchResult = results.next();
                     String dn = searchResult.getNameInNamespace();
-                    logger.debug("找到員工 DN: {}", dn);
+                    log.debug("找到員工 DN: {}", dn);
 
                     for (Map.Entry<String, String> entry : updatedFields.entrySet()) {
                         String ldapAttribute = mapFieldToLdapAttribute(entry.getKey());
@@ -184,9 +182,9 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
 
                             try {
                                 ctx.modifyAttributes(dn, mods);
-                                logger.info("成功更新屬性: {} = {}", ldapAttribute, value.trim());
+                                log.info("成功更新屬性: {} = {}", ldapAttribute, value.trim());
                             } catch (NamingException e) {
-                                logger.error("更新屬性 {} 時發生錯誤: {}", ldapAttribute, e.getMessage());
+                                log.error("更新屬性 {} 時發生錯誤: {}", ldapAttribute, e.getMessage());
                             }
                         }
                     }
@@ -206,7 +204,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
             } while (cookie != null);
 
         } catch (NamingException | IOException e) {
-            logger.error("LDAP 操作失敗: {}", e.getMessage());
+            log.error("LDAP 操作失敗: {}", e.getMessage());
         }
     }
 
@@ -227,7 +225,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
             // case "datamodifieddate": 2023版本AD才有
             // return "whenChanged";
             default:
-                logger.warn("未知的字段映射: {}", field);
+                log.warn("未知的字段映射: {}", field);
                 return null;
         }
     }
@@ -261,7 +259,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
 
             // 創建用戶
             ctx.createSubcontext(dn, attrs);
-            logger.info("成功創建 LDAP 帳號: {}", dn);
+            log.info("成功創建 LDAP 帳號: {}", dn);
 
             // 添加 proxyAddresses
             addProxyAddresses(ctx, dn, employee);
@@ -298,7 +296,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
 
         // 反轉 OU 列表,使其從最上層開始
         // Collections.reverse(ouList);
-        logger.info("OU 列表: {}", ouList);
+        log.info("OU 列表: {}", ouList);
 
         // 構建基礎 DN
         Name baseDn = new LdapName(ldapBaseDn);
@@ -308,7 +306,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
             baseDn.add(0, "OU=" + ou);
             try {
                 ctx.lookup(baseDn);
-                logger.debug("OU 已存在: {}", baseDn);
+                log.debug("OU 已存在: {}", baseDn);
             } catch (NameNotFoundException e) {
                 // 如果 OU 不存在,創建它
                 Attributes ouAttrs = new BasicAttributes();
@@ -320,13 +318,13 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
 
                 try {
                     ctx.createSubcontext(baseDn, ouAttrs);
-                    logger.info("成功創建組織單位: {}", baseDn);
+                    log.info("成功創建組織單位: {}", baseDn);
                 } catch (NamingException ne) {
-                    logger.error("創建組織單位時發生錯誤: {}", baseDn, ne);
+                    log.error("創建組織單位時發生錯誤: {}", baseDn, ne);
                     throw ne;
                 }
             } catch (NamingException ne) {
-                logger.error("檢查 OU 結構時發生未知錯誤: {}", baseDn, ne);
+                log.error("檢查 OU 結構時發生未知錯誤: {}", baseDn, ne);
                 throw ne;
             }
         }
@@ -341,7 +339,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         proxyMods[0] = new ModificationItem(DirContext.ADD_ATTRIBUTE, proxyAddresses);
 
         ctx.modifyAttributes(dn, proxyMods);
-        logger.info("成功新增 proxyAddresses 屬性: {}", dn);
+        log.info("成功新增 proxyAddresses 屬性: {}", dn);
     }
 
     private void enableAccount(LdapContext ctx, Name dn) throws NamingException {
@@ -349,37 +347,38 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
             // 檢查當前帳號狀態
             Attributes attrs = ctx.getAttributes(dn, new String[] { "userAccountControl" });
             String currentUAC = attrs.get("userAccountControl").get().toString();
-            logger.info("當前帳號狀態 (UAC): {}", currentUAC);
+            log.info("當前帳號狀態 (UAC): {}", currentUAC);
 
             int uacValue = Integer.parseInt(currentUAC);
             int newUacValue = (uacValue & ~2) | 512; // 移除 "停用" 標記，添加 "正常帳戶" 標記
-            logger.info("新的 UAC 值: {}", newUacValue);
+            log.info("新的 UAC 值: {}", newUacValue);
 
             // 更新 UAC 值
             ModificationItem[] mods = new ModificationItem[1];
             mods[0] = new ModificationItem(DirContext.REPLACE_ATTRIBUTE,
                     new BasicAttribute("userAccountControl", Integer.toString(newUacValue)));
             ctx.modifyAttributes(dn, mods);
-            logger.info("成功更新 UAC 值");
+            log.info("成功更新 UAC 值");
 
             // 驗證最終帳號狀態
             attrs = ctx.getAttributes(dn, new String[] { "userAccountControl" });
             String finalUAC = attrs.get("userAccountControl").get().toString();
-            logger.info("最終帳號狀態 (UAC): {}", finalUAC);
+            log.info("最終帳號狀態 (UAC): {}", finalUAC);
 
             if (Integer.parseInt(finalUAC) == newUacValue) {
-                logger.info("成功啟用 LDAP 帳號: {}", dn);
+                log.info("成功啟用 LDAP 帳號: {}", dn);
             } else {
-                logger.warn("帳號可能未完全啟用，最終 userAccountControl 值: {}", finalUAC);
+                log.warn("帳號可能未完全啟用，最終 userAccountControl 值: {}", finalUAC);
             }
         } catch (NamingException e) {
-            logger.error("啟用帳號時發生錯誤: {}, 錯誤: {}", dn, e.getMessage());
+            log.error("啟用帳號時發生錯誤: {}, 錯誤: {}", dn, e.getMessage());
             throw e;
         }
     }
 
     private void setUserPassword(LdapContext ctx, Name dn) {
-        // TODO: 需要請客戶確認 AD server 是否啟用 SSL/TLS 加密, LDAP需要進行驗證才能正常執行; 若改用powershell方式, 可以不用 ssl, 但是部屬的時候要和該 AD 同網域, 不須登入驗證
+        // TODO: 需要請客戶確認 AD server 是否啟用 SSL/TLS 加密, LDAP需要進行驗證才能正常執行; 若改用powershell方式,
+        // 可以不用 ssl, 但是部屬的時候要和該 AD 同網域, 不須登入驗證
         try {
 
             // 然後設置密碼
@@ -394,7 +393,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
                     new BasicAttribute("unicodePwd", passwordBytes));
 
             ctx.modifyAttributes(dn, mods);
-            logger.info("成功設置新密碼");
+            log.info("成功設置新密碼");
 
             // 最後,如果需要,移除 PASSWD_NOTREQD 標誌
             ModificationItem[] uacMods = new ModificationItem[1];
@@ -403,7 +402,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
             ctx.modifyAttributes(dn, uacMods);
 
         } catch (NamingException | UnsupportedEncodingException e) {
-            logger.error("設置密碼時發生錯誤: {}", e.getMessage());
+            log.error("設置密碼時發生錯誤: {}", e.getMessage());
         }
     }
 
@@ -423,7 +422,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
                     new BasicAttribute("userAccountControl", "514"));
             ctx.modifyAttributes(dn, mods);
 
-            logger.info("成功停用 LDAP 帳號: {}", dn);
+            log.info("成功停用 LDAP 帳號: {}", dn);
 
             // 可選：移動到停用的 OU
             // Name newDn = LdapNameBuilder.newInstance(ldapBaseDn)
@@ -431,7 +430,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
             // .add(dn.get(dn.size() - 1))
             // .build();
             // ctx.rename(dn, newDn);
-            // logger.info("已將停用的帳號移動到 Disabled Accounts OU: {}", newDn);
+            // log.info("已將停用的帳號移動到 Disabled Accounts OU: {}", newDn);
         } finally {
             if (ctx != null) {
                 ctx.close();

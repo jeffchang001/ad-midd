@@ -20,9 +20,9 @@ import com.sogo.ad.midd.service.ADLDAPSyncService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
 @RestController
 @RequiredArgsConstructor
-@Slf4j
 public class ADSyncController {
 
     private final RestTemplate restTemplate;
