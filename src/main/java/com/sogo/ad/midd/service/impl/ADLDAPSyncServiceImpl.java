@@ -320,9 +320,8 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
 
                 // 添加 description 屬性, 只針對最後一個組織儲存組織代碼, 
                 if (i == ouList.size() - 1) {
-                    ouAttrs.put("description", "orgCode:"+employee.getFormulaOrgCode());
-                }
-                
+                    ouAttrs.put("description", "orgCode="+employee.getFormulaOrgCode());
+                }                
 
                 try {
                     ctx.createSubcontext(currentDn, ouAttrs);
