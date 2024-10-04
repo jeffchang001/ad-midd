@@ -9,6 +9,7 @@ import org.springframework.web.client.RestTemplate;
 public class AdMiddApplication {
 
 	public static void main(String[] args) {
+		System.setProperty("com.sun.jndi.ldap.object.disableEndpointIdentification", "true");
 		SpringApplication.run(AdMiddApplication.class, args);
 	}
 

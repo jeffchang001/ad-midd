@@ -56,9 +56,6 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
     @Value("${ldap.password}")
     private String ldapPassword;
 
-    @Value("${ldap.is.production.site}")
-    private Boolean isProductionSite;
-
     @Override
     public void syncEmployeeToLDAP(ADSyncDto employeeData) throws Exception {
         log.info("employeeNo: {}", employeeData.getEmployeeNo());
@@ -93,14 +90,29 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
 
     private LdapContext getLdapContext() throws NamingException {
         Hashtable<String, Object> env = new Hashtable<>();
+        env.put("java.naming.ldap.attributes.binary", "objectGUID");
         env.put(Context.INITIAL_CONTEXT_FACTORY, "com.sun.jndi.ldap.LdapCtxFactory");
         env.put(Context.PROVIDER_URL, ldapUrl);
         env.put(Context.SECURITY_AUTHENTICATION, "simple");
         env.put(Context.SECURITY_PRINCIPAL, ldapUsername);
         env.put(Context.SECURITY_CREDENTIALS, ldapPassword);
         env.put(Context.REFERRAL, "follow");
+        env.put("java.naming.ldap.version", "3");
+        env.put(Context.SECURITY_PROTOCOL, "ssl");
 
-        return new InitialLdapContext(env, null);
+        LdapContext ctx = new InitialLdapContext(env, null);
+
+        try {
+            SearchControls searchControls = new SearchControls();
+            searchControls.setSearchScope(SearchControls.OBJECT_SCOPE);
+            ctx.search(ldapBaseDn, "(objectClass=*)", searchControls);
+            log.info("LDAP 連接成功");
+        } catch (NamingException e) {
+            log.error("LDAP 連接測試失敗", e);
+            throw e;
+        }
+
+        return ctx;
     }
 
     @Override
@@ -128,11 +140,6 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         List<OrganizationHierarchyDto> sortedOrgHierarchy = orgHierarchy.stream()
                 .sorted(Comparator.comparingInt(OrganizationHierarchyDto::getOrgLevel).reversed())
                 .collect(Collectors.toList());
-
-        // 在這裡加入自定義的 OU
-        if (isProductionSite == Boolean.FALSE) {
-            builder.add("OU", "開發測試區");
-        }
 
         // 建構 OU 部分
         for (OrganizationHierarchyDto org : sortedOrgHierarchy) {
@@ -236,7 +243,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
             ctx = getLdapContext();
 
             // 確保所有父 OU 存在
-            // ensureOUStructure(ctx, dn);
+            ensureOUStructure(ctx, dn, employee);
 
             // 創建用戶屬性
             Attributes attrs = new BasicAttributes();
@@ -283,32 +290,27 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         }
     }
 
-    private void ensureOUStructure(LdapContext ctx, Name dn) throws NamingException {
+    private void ensureOUStructure(LdapContext ctx, Name dn, APIEmployeeInfo employee) throws NamingException {
+        log.debug("開始確保 OU 結構: {}", dn);
         List<String> ouList = new ArrayList<>();
-
-        // 從 DN 中提取所有 OU
         for (int i = 0; i < dn.size(); i++) {
             String rdn = dn.get(i);
             if (rdn.startsWith("OU=") || rdn.startsWith("ou=")) {
-                ouList.add(rdn.substring(3)); // 移除 "OU=" 前綴
+                ouList.add(rdn.substring(3));
             }
         }
+        log.debug("OU 列表: {}", ouList);
 
-        // 反轉 OU 列表,使其從最上層開始
-        // Collections.reverse(ouList);
-        log.info("OU 列表: {}", ouList);
-
-        // 構建基礎 DN
-        Name baseDn = new LdapName(ldapBaseDn);
-
-        // 從最上層 OU 開始創建
-        for (String ou : ouList) {
-            baseDn.add(0, "OU=" + ou);
+        Name currentDn = new LdapName(ldapBaseDn);
+        for (int i = 0; i < ouList.size(); i++) {
+            String ou = ouList.get(i);
+            currentDn.add("OU=" + ou);
             try {
-                ctx.lookup(baseDn);
-                log.debug("OU 已存在: {}", baseDn);
+                log.debug("嘗試查找 OU: {}", currentDn);
+                ctx.lookup(currentDn);
+                log.debug("OU 已存在: {}", currentDn);
             } catch (NameNotFoundException e) {
-                // 如果 OU 不存在,創建它
+                log.debug("OU 不存在，嘗試創建: {}", currentDn);
                 Attributes ouAttrs = new BasicAttributes();
                 Attribute ouObjectClass = new BasicAttribute("objectClass");
                 ouObjectClass.add("top");
@@ -316,15 +318,21 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
                 ouAttrs.put(ouObjectClass);
                 ouAttrs.put("ou", ou);
 
+                // 添加 description 屬性, 只針對最後一個組織儲存組織代碼, 
+                if (i == ouList.size() - 1) {
+                    ouAttrs.put("description", "orgCode:"+employee.getFormulaOrgCode());
+                }
+                
+
                 try {
-                    ctx.createSubcontext(baseDn, ouAttrs);
-                    log.info("成功創建組織單位: {}", baseDn);
+                    ctx.createSubcontext(currentDn, ouAttrs);
+                    log.info("成功創建組織單位: {}", currentDn);
                 } catch (NamingException ne) {
-                    log.error("創建組織單位時發生錯誤: {}", baseDn, ne);
+                    log.error("創建組織單位時發生錯誤: {}, 錯誤: {}", currentDn, ne.getMessage(), ne);
                     throw ne;
                 }
             } catch (NamingException ne) {
-                log.error("檢查 OU 結構時發生未知錯誤: {}", baseDn, ne);
+                log.error("檢查 OU 結構時發生未知錯誤: {}, 錯誤: {}", currentDn, ne.getMessage(), ne);
                 throw ne;
             }
         }
