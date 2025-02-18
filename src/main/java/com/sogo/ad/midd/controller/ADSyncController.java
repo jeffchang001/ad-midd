@@ -42,7 +42,7 @@ public class ADSyncController {
             if (syncDataList == null || syncDataList.isEmpty()) {
                 return ResponseEntity.noContent().build();
             }
-
+            log.info("獲取到 {} 條 AD 同步數據", syncDataList.size());
             processADSyncData(syncDataList);
             return ResponseEntity.ok("同步成功完成");
         } catch (Exception e) {
@@ -52,9 +52,9 @@ public class ADSyncController {
     }
 
     private List<ADSyncDto> fetchADSyncData() {
-        String url = baseUrl + "/api/v1/ad-sync";
+        String url = baseUrl + "/api/v1/ad-sync-data";
         HttpHeaders headers = new HttpHeaders();
-        headers.set("Authorization", "Bearer " + token);
+        headers.set("Authorization", token);
 
         HttpEntity<String> entity = new HttpEntity<>(headers);
 

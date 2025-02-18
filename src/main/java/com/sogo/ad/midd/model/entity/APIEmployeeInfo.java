@@ -11,7 +11,7 @@ public class APIEmployeeInfo {
 
     @JsonProperty("id")
     private Long id; // 您可以根據需要調整 ID 的類型
-
+    
     @JsonProperty("PartyRoleID")
     private Long partyRoleID;
 
@@ -24,6 +24,9 @@ public class APIEmployeeInfo {
     @JsonProperty("EmployeeNo")
     private String employeeNo;
 
+    @JsonProperty("IDNoSuffix")
+    private String idNoSuffix;
+    
     @JsonProperty("IDNo")
     private String idNo;
 
@@ -47,6 +50,9 @@ public class APIEmployeeInfo {
 
     @JsonProperty("UserID")
     private String userID;
+
+    @JsonProperty("JobFlag")
+    private String jobFlag;
 
     @JsonProperty("JobGradeCode")
     private String jobGradeCode;
@@ -163,18 +169,18 @@ public class APIEmployeeInfo {
     private String dataModifiedUser;
 
     // @JsonProperty("FunctionOrgPartyID")
+    // @Column(name = "FunctionOrgPartyID")
     // private String functionOrgPartyID;
 
     @JsonProperty("FunctionOrgCode")
     private String functionOrgCode;
-    
+
     @JsonProperty("FunctionOrgName")
     private String functionOrgName;
-    
+
     @JsonProperty("MVPN")
     private String mvpn;
-    
-    @JsonProperty("status")
+
     private String status;
 
 }

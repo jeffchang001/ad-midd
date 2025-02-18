@@ -21,9 +21,9 @@ import javax.naming.ldap.PagedResultsResponseControl;
 
 public class LDAPApplication {
     public static void main(String[] args) {
-        String ldapUrl = "ldap://4.145.88.25:389";
-        String ldapBaseDn = "DC=sogotest,DC=local";
-        String ldapUsername = "jeffchangadmtest@sogotest.local";
+        String ldapUrl = "ldap://48.218.20.1:389";
+        String ldapBaseDn = "DC=uat-sogo,DC=net";
+        String ldapUsername = "jeffchang@uat-sogo.net";
         String ldapPassword = "123qweaS";
 
         Hashtable<String, Object> env = new Hashtable<>();
@@ -50,47 +50,47 @@ public class LDAPApplication {
             String[] returnedAtts = { "cn", "sn", "mail", "displayName" }; // 加入 displayName
             searchControls.setReturningAttributes(returnedAtts);
 
-            String searchFilter = "(&(objectClass=person)(cn=007338))";
+            String searchFilter = "(&(objectClass=person)(cn=林小齊))";
             System.out.println("搜索過濾器: " + searchFilter);
             System.out.println("基礎 DN: " + ldapBaseDn);
 
-            do {
-                NamingEnumeration<SearchResult> results = ctx.search(ldapBaseDn, searchFilter, searchControls);
+            // do {
+            //     NamingEnumeration<SearchResult> results = ctx.search(ldapBaseDn, searchFilter, searchControls);
 
-                while (results != null && results.hasMoreElements()) {
-                    SearchResult searchResult = results.next();
-                    Attributes attrs = searchResult.getAttributes();
-                    System.out.println("找到用戶: " + searchResult.getName());
-                    System.out.println("CN: " + attrs.get("cn"));
-                    System.out.println("SN: " + attrs.get("sn"));
-                    System.out.println("Mail: " + attrs.get("mail"));
-                    System.out.println("Current DisplayName: " + attrs.get("displayName")); // 列印原本的 displayName
-                    System.out.println("------------------------");
+            //     while (results != null && results.hasMoreElements()) {
+            //         SearchResult searchResult = results.next();
+            //         Attributes attrs = searchResult.getAttributes();
+            //         System.out.println("找到用戶: " + searchResult.getName());
+            //         System.out.println("CN: " + attrs.get("cn"));
+            //         System.out.println("SN: " + attrs.get("sn"));
+            //         System.out.println("Mail: " + attrs.get("mail"));
+            //         System.out.println("Current DisplayName: " + attrs.get("displayName")); // 列印原本的 displayName
+            //         System.out.println("------------------------");
 
-                    // 修改 displayName
-                    String newDisplayName = "葉為立";
-                    Attribute displayNameAttr = new BasicAttribute("displayName", newDisplayName);
-                    ModificationItem[] mods = new ModificationItem[1];
-                    mods[0] = new ModificationItem(DirContext.REPLACE_ATTRIBUTE, displayNameAttr);
+            //         // 修改 displayName
+            //         String newDisplayName = "葉為立";
+            //         Attribute displayNameAttr = new BasicAttribute("displayName", newDisplayName);
+            //         ModificationItem[] mods = new ModificationItem[1];
+            //         mods[0] = new ModificationItem(DirContext.REPLACE_ATTRIBUTE, displayNameAttr);
 
-                    // 執行更新操作
-                    System.out.println("searchResult.getNameInNamespace()==="+searchResult.getNameInNamespace());
-                    ctx.modifyAttributes(searchResult.getNameInNamespace(), mods);
-                    System.out.println("成功更新 displayName 為: " + newDisplayName);
-                }
+            //         // 執行更新操作
+            //         System.out.println("searchResult.getNameInNamespace()==="+searchResult.getNameInNamespace());
+            //         ctx.modifyAttributes(searchResult.getNameInNamespace(), mods);
+            //         System.out.println("成功更新 displayName 為: " + newDisplayName);
+            //     }
 
-                Control[] controls = ctx.getResponseControls();
-                if (controls != null) {
-                    for (Control control : controls) {
-                        if (control instanceof PagedResultsResponseControl) {
-                            PagedResultsResponseControl prrc = (PagedResultsResponseControl) control;
-                            cookie = prrc.getCookie();
-                        }
-                    }
-                }
+            //     Control[] controls = ctx.getResponseControls();
+            //     if (controls != null) {
+            //         for (Control control : controls) {
+            //             if (control instanceof PagedResultsResponseControl) {
+            //                 PagedResultsResponseControl prrc = (PagedResultsResponseControl) control;
+            //                 cookie = prrc.getCookie();
+            //             }
+            //         }
+            //     }
 
-                ctx.setRequestControls(new Control[] { new PagedResultsControl(pageSize, cookie, Control.CRITICAL) });
-            } while (cookie != null);
+            //     ctx.setRequestControls(new Control[] { new PagedResultsControl(pageSize, cookie, Control.CRITICAL) });
+            // } while (cookie != null);
 
         } catch (NamingException | IOException e) {
             System.err.println("LDAP 操作失敗: " + e.getMessage());

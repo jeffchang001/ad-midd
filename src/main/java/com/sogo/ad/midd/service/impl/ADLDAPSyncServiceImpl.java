@@ -96,9 +96,10 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         env.put(Context.SECURITY_AUTHENTICATION, "simple");
         env.put(Context.SECURITY_PRINCIPAL, ldapUsername);
         env.put(Context.SECURITY_CREDENTIALS, ldapPassword);
-        env.put(Context.REFERRAL, "follow");
-        env.put("java.naming.ldap.version", "3");
-        env.put(Context.SECURITY_PROTOCOL, "ssl");
+        env.put(Context.REFERRAL, "ignore");
+        // env.put(Context.REFERRAL, "follow");
+        // env.put("java.naming.ldap.version", "3");
+        // env.put(Context.SECURITY_PROTOCOL, "ssl");
 
         LdapContext ctx = new InitialLdapContext(env, null);
 
@@ -271,11 +272,11 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
             // 添加 proxyAddresses
             addProxyAddresses(ctx, dn, employee);
 
-            // 啟用帳號
-            enableAccount(ctx, dn);
+            // 啟用帳號 TODO: 需要連線到 AAD 執行, 機制可能會不同
+            // enableAccount(ctx, dn);
 
-            // 設置密碼
-            setUserPassword(ctx, dn);
+            // 設置密碼 TODO: 需要連線到 AAD 執行, 機制可能會不同
+            // setUserPassword(ctx, dn);
 
         } finally {
             if (ctx != null) {
