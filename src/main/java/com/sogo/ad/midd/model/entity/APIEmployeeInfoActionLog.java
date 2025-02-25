@@ -29,6 +29,15 @@ public class APIEmployeeInfoActionLog {
 
     private LocalDateTime createdDate;
 
-    private Boolean isSync = Boolean.FALSE;
+    public APIEmployeeInfoActionLog(String employeeNo, String action, String fieldName,
+            String oldValue, String newValue) {
+        this.employeeNo = employeeNo;
+        this.action = action;
+        this.fieldName = fieldName;
+        this.oldValue = oldValue;
+        this.newValue = newValue;
+        this.actionDate = LocalDateTime.now();
+        this.createdDate = LocalDateTime.now();
+    }
 
 }

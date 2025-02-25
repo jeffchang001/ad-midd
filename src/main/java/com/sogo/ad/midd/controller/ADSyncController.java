@@ -1,20 +1,36 @@
 package com.sogo.ad.midd.controller;
 
+import java.time.LocalDate;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import javax.naming.NamingException;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.client.RestTemplate;
+import org.springframework.web.util.UriComponentsBuilder;
+
 import com.sogo.ad.midd.model.dto.ADSyncDto;
 import com.sogo.ad.midd.service.ADLDAPSyncService;
+
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.ParameterizedTypeReference;
-import org.springframework.http.*;
-import org.springframework.web.bind.annotation.*;
-import org.springframework.web.client.RestTemplate;
-
-import javax.naming.NamingException;
-import java.util.List;
 
 @Slf4j
 @RestController
@@ -36,9 +52,11 @@ public class ADSyncController {
     @ApiResponse(responseCode = "200", description = "同步成功完成")
     @ApiResponse(responseCode = "204", description = "沒有數據需要同步")
     @ApiResponse(responseCode = "500", description = "同步過程中發生錯誤")
-    public ResponseEntity<String> syncADData() {
+    public ResponseEntity<String> syncADData(
+            @Parameter(description = "基準日期：日期之後的資料", schema = @Schema(type = "string", format = "date", example = "2024-09-25")) 
+			@RequestParam(name = "base-date", required = true) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate baseDate) {
         try {
-            List<ADSyncDto> syncDataList = fetchADSyncData();
+            List<ADSyncDto> syncDataList = fetchADSyncData(baseDate);
             if (syncDataList == null || syncDataList.isEmpty()) {
                 return ResponseEntity.noContent().build();
             }
@@ -51,15 +69,23 @@ public class ADSyncController {
         }
     }
 
-    private List<ADSyncDto> fetchADSyncData() {
-        String url = baseUrl + "/api/v1/ad-sync-data";
+    private List<ADSyncDto> fetchADSyncData(LocalDate baseDate) {
+        String apiUrl = baseUrl + "/api/v1/ad-sync-data";
         HttpHeaders headers = new HttpHeaders();
         headers.set("Authorization", token);
+
+        Map<String, String> params = new HashMap<>();
+		params.put("base-date", baseDate != null ? baseDate.toString().trim() : "");
+
+        UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(apiUrl);
+        if (params != null) {
+			params.forEach(builder::queryParam);
+		}
 
         HttpEntity<String> entity = new HttpEntity<>(headers);
 
         ResponseEntity<List<ADSyncDto>> response = restTemplate.exchange(
-                url,
+                builder.toUriString(),
                 HttpMethod.GET,
                 entity,
                 new ParameterizedTypeReference<List<ADSyncDto>>() {
@@ -73,7 +99,7 @@ public class ADSyncController {
             try {
                 log.info("處理同步數據, 員工編號: {}, 組織名稱: {}",
                         adSyncDto.getEmployeeNo(),
-                        adSyncDto.getOrgHierarchyDto().get(0).getOrgName());
+                        (adSyncDto.getOrgHierarchyDto() != null)? adSyncDto.getOrgHierarchyDto().get(0).getOrgName(): "N/A");
 
                 adldapSyncService.syncEmployeeToLDAP(adSyncDto);
 

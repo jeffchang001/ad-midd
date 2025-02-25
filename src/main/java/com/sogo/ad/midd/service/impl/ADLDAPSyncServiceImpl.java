@@ -75,11 +75,11 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
             case "U":
                 log.debug("更新員工資訊: {}", employee.getEmployeeNo());
                 ctx = getLdapContext();
-                updateEmployee(ctx, employee, employeeData.getUpdatedFields());
+                // updateEmployee(ctx, employee, employeeData.getUpdatedFields());
                 break;
             case "D":
                 log.debug("停用員工: {}", employee.getEmployeeNo());
-                disableEmployee(dn);
+                // disableEmployee(dn);
                 break;
             default:
                 log.error("未知的操作類型: {}", action);
@@ -276,7 +276,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
             // enableAccount(ctx, dn);
 
             // 設置密碼 TODO: 需要連線到 AAD 執行, 機制可能會不同
-            // setUserPassword(ctx, dn);
+            // setUserPassword(ctx, dn, employee);
 
         } finally {
             if (ctx != null) {
@@ -319,10 +319,10 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
                 ouAttrs.put(ouObjectClass);
                 ouAttrs.put("ou", ou);
 
-                // 添加 description 屬性, 只針對最後一個組織儲存組織代碼, 
+                // 添加 description 屬性, 只針對最後一個組織儲存組織代碼,
                 if (i == ouList.size() - 1) {
-                    ouAttrs.put("description", "orgCode="+employee.getFormulaOrgCode());
-                }                
+                    ouAttrs.put("description", "orgCode=" + employee.getFormulaOrgCode());
+                }
 
                 try {
                     ctx.createSubcontext(currentDn, ouAttrs);
@@ -384,13 +384,13 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         }
     }
 
-    private void setUserPassword(LdapContext ctx, Name dn) {
+    private void setUserPassword(LdapContext ctx, Name dn, APIEmployeeInfo employee) {
         // TODO: 需要請客戶確認 AD server 是否啟用 SSL/TLS 加密, LDAP需要進行驗證才能正常執行; 若改用powershell方式,
         // 可以不用 ssl, 但是部屬的時候要和該 AD 同網域, 不須登入驗證
         try {
 
-            // 然後設置密碼
-            String newPassword = generateRandomPassword();
+            // 然後設置密碼 "Sogo$" + 身份證字號後四碼
+            String newPassword = "Sogo$" + employee.getIdNoSuffix();
 
             // 密碼必須以 UTF-16LE 格式，並且包圍在雙引號內
             String quotedPassword = "\"" + newPassword + "\"";
@@ -412,11 +412,6 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         } catch (NamingException | UnsupportedEncodingException e) {
             log.error("設置密碼時發生錯誤: {}", e.getMessage());
         }
-    }
-
-    private String generateRandomPassword() {
-        // TODO: 預設密碼policy為「Sogo$身份證後四碼」, 身分證的部分要等 Radar 改版後取得APIEmployeeInfo.IDNo
-        return "Sogo$6018";
     }
 
     private void disableEmployee(Name dn) throws NamingException {
@@ -444,5 +439,20 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
                 ctx.close();
             }
         }
+    }
+
+    private boolean isPasswordValid(String password) {
+        // 檢查密碼長度
+        if (password.length() < 8) {
+            return false;
+        }
+
+        // 檢查是否包含大寫字母、小寫字母、數字和特殊字符
+        boolean hasUppercase = !password.equals(password.toLowerCase());
+        boolean hasLowercase = !password.equals(password.toUpperCase());
+        boolean hasDigit = password.matches(".*\\d.*");
+        boolean hasSpecialChar = password.matches(".*[!@#$%^&*()_+\\-=\\[\\]{};':\"\\\\|,.<>\\/?].*");
+
+        return hasUppercase && hasLowercase && hasDigit && hasSpecialChar;
     }
 }
