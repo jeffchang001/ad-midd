@@ -13,6 +13,7 @@ import javax.naming.ldap.PagedResultsControl;
 
 public class LDAPApplication {
     public static void main(String[] args) {
+        // String ldapUrl = "ldaps://48.218.20.1:636";
         String ldapUrl = "ldap://48.218.20.1:389";
         String ldapBaseDn = "DC=uat-sogo,DC=net";
         String ldapUsername = "jeffchang@uat-sogo.net";
@@ -25,6 +26,12 @@ public class LDAPApplication {
         env.put(Context.SECURITY_PRINCIPAL, ldapUsername);
         env.put(Context.SECURITY_CREDENTIALS, ldapPassword);
         env.put(Context.REFERRAL, "ignore");
+        // env.put(Context.SECURITY_PROTOCOL, "SSL");
+
+		// env.put("java.naming.ldap.factory.socket", "com.sogo.ad.midd.MySSLSocketFactory");
+        
+        // Enable SSL debugging
+        // System.setProperty("javax.net.debug", "all");
 
         LdapContext ctx = null;
 
@@ -47,41 +54,46 @@ public class LDAPApplication {
             System.out.println("基礎 DN: " + ldapBaseDn);
 
             // do {
-            //     NamingEnumeration<SearchResult> results = ctx.search(ldapBaseDn, searchFilter, searchControls);
+            // NamingEnumeration<SearchResult> results = ctx.search(ldapBaseDn,
+            // searchFilter, searchControls);
 
-            //     while (results != null && results.hasMoreElements()) {
-            //         SearchResult searchResult = results.next();
-            //         Attributes attrs = searchResult.getAttributes();
-            //         System.out.println("找到用戶: " + searchResult.getName());
-            //         System.out.println("CN: " + attrs.get("cn"));
-            //         System.out.println("SN: " + attrs.get("sn"));
-            //         System.out.println("Mail: " + attrs.get("mail"));
-            //         System.out.println("Current DisplayName: " + attrs.get("displayName")); // 列印原本的 displayName
-            //         System.out.println("------------------------");
+            // while (results != null && results.hasMoreElements()) {
+            // SearchResult searchResult = results.next();
+            // Attributes attrs = searchResult.getAttributes();
+            // System.out.println("找到用戶: " + searchResult.getName());
+            // System.out.println("CN: " + attrs.get("cn"));
+            // System.out.println("SN: " + attrs.get("sn"));
+            // System.out.println("Mail: " + attrs.get("mail"));
+            // System.out.println("Current DisplayName: " + attrs.get("displayName")); //
+            // 列印原本的 displayName
+            // System.out.println("------------------------");
 
-            //         // 修改 displayName
-            //         String newDisplayName = "葉為立";
-            //         Attribute displayNameAttr = new BasicAttribute("displayName", newDisplayName);
-            //         ModificationItem[] mods = new ModificationItem[1];
-            //         mods[0] = new ModificationItem(DirContext.REPLACE_ATTRIBUTE, displayNameAttr);
+            // // 修改 displayName
+            // String newDisplayName = "葉為立";
+            // Attribute displayNameAttr = new BasicAttribute("displayName",
+            // newDisplayName);
+            // ModificationItem[] mods = new ModificationItem[1];
+            // mods[0] = new ModificationItem(DirContext.REPLACE_ATTRIBUTE,
+            // displayNameAttr);
 
-            //         // 執行更新操作
-            //         System.out.println("searchResult.getNameInNamespace()==="+searchResult.getNameInNamespace());
-            //         ctx.modifyAttributes(searchResult.getNameInNamespace(), mods);
-            //         System.out.println("成功更新 displayName 為: " + newDisplayName);
-            //     }
+            // // 執行更新操作
+            // System.out.println("searchResult.getNameInNamespace()==="+searchResult.getNameInNamespace());
+            // ctx.modifyAttributes(searchResult.getNameInNamespace(), mods);
+            // System.out.println("成功更新 displayName 為: " + newDisplayName);
+            // }
 
-            //     Control[] controls = ctx.getResponseControls();
-            //     if (controls != null) {
-            //         for (Control control : controls) {
-            //             if (control instanceof PagedResultsResponseControl) {
-            //                 PagedResultsResponseControl prrc = (PagedResultsResponseControl) control;
-            //                 cookie = prrc.getCookie();
-            //             }
-            //         }
-            //     }
+            // Control[] controls = ctx.getResponseControls();
+            // if (controls != null) {
+            // for (Control control : controls) {
+            // if (control instanceof PagedResultsResponseControl) {
+            // PagedResultsResponseControl prrc = (PagedResultsResponseControl) control;
+            // cookie = prrc.getCookie();
+            // }
+            // }
+            // }
 
-            //     ctx.setRequestControls(new Control[] { new PagedResultsControl(pageSize, cookie, Control.CRITICAL) });
+            // ctx.setRequestControls(new Control[] { new PagedResultsControl(pageSize,
+            // cookie, Control.CRITICAL) });
             // } while (cookie != null);
 
         } catch (NamingException | IOException e) {

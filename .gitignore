@@ -35,3 +35,6 @@ build/
 .logs/**
 *.gz
 *.log
+
+### mac os ###
+*.DS_Store

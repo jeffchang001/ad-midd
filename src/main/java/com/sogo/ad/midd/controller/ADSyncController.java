@@ -53,8 +53,7 @@ public class ADSyncController {
     @ApiResponse(responseCode = "204", description = "沒有數據需要同步")
     @ApiResponse(responseCode = "500", description = "同步過程中發生錯誤")
     public ResponseEntity<String> syncADData(
-            @Parameter(description = "基準日期：日期之後的資料", schema = @Schema(type = "string", format = "date", example = "2024-09-25")) 
-			@RequestParam(name = "base-date", required = true) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate baseDate) {
+            @Parameter(description = "基準日期：日期之後的資料", schema = @Schema(type = "string", format = "date", example = "2025-02-26")) @RequestParam(name = "base-date", required = true) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate baseDate) {
         try {
             List<ADSyncDto> syncDataList = fetchADSyncData(baseDate);
             if (syncDataList == null || syncDataList.isEmpty()) {
@@ -75,12 +74,12 @@ public class ADSyncController {
         headers.set("Authorization", token);
 
         Map<String, String> params = new HashMap<>();
-		params.put("base-date", baseDate != null ? baseDate.toString().trim() : "");
+        params.put("base-date", baseDate != null ? baseDate.toString().trim() : "");
 
         UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(apiUrl);
         if (params != null) {
-			params.forEach(builder::queryParam);
-		}
+            params.forEach(builder::queryParam);
+        }
 
         HttpEntity<String> entity = new HttpEntity<>(headers);
 
@@ -97,14 +96,18 @@ public class ADSyncController {
     private void processADSyncData(List<ADSyncDto> syncDataList) {
         for (ADSyncDto adSyncDto : syncDataList) {
             try {
-                log.info("處理同步數據, 員工編號: {}, 組織名稱: {}",
-                        adSyncDto.getEmployeeNo(),
-                        (adSyncDto.getOrgHierarchyDto() != null)? adSyncDto.getOrgHierarchyDto().get(0).getOrgName(): "N/A");
+                if (adSyncDto.getOrgHierarchyDto() == null || adSyncDto.getOrgHierarchyDto().isEmpty()) {
+                    log.info("組織資訊為空, 員工編號: {}", adSyncDto.getEmployeeNo());
+                    continue;
+                } else {
+                    log.info("處理同步數據, 員工編號: {}, 組織名稱: {}",
+                            adSyncDto.getEmployeeNo(), adSyncDto.getOrgHierarchyDto().get(0).getOrgName());
 
-                adldapSyncService.syncEmployeeToLDAP(adSyncDto);
+                    adldapSyncService.syncEmployeeToAD(adSyncDto);
+                }
 
                 // TODO: 處理組織同步
-                // adldapSyncService.syncOrganizationToLDAP(adSyncDto);
+                // adldapSyncService.syncOrganizationToAD(adSyncDto);
             } catch (NamingException e) {
                 handleSyncException("LDAP操作錯誤", adSyncDto, e);
             } catch (Exception e) {

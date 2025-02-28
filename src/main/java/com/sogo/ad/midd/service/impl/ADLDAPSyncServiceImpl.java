@@ -1,6 +1,8 @@
 package com.sogo.ad.midd.service.impl;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -29,6 +31,7 @@ import javax.naming.ldap.LdapName;
 import javax.naming.ldap.PagedResultsControl;
 import javax.naming.ldap.PagedResultsResponseControl;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.ldap.support.LdapNameBuilder;
 import org.springframework.stereotype.Service;
@@ -36,6 +39,9 @@ import org.springframework.stereotype.Service;
 import com.sogo.ad.midd.model.dto.ADSyncDto;
 import com.sogo.ad.midd.model.dto.OrganizationHierarchyDto;
 import com.sogo.ad.midd.model.entity.APIEmployeeInfo;
+import com.sogo.ad.midd.model.entity.APIEmployeeInfoActionLog;
+import com.sogo.ad.midd.repository.APIEmployeeInfoActionLogRepository;
+import com.sogo.ad.midd.repository.APIEmployeeInfoRepository;
 import com.sogo.ad.midd.service.ADLDAPSyncService;
 
 import lombok.extern.slf4j.Slf4j;
@@ -56,8 +62,14 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
     @Value("${ldap.password}")
     private String ldapPassword;
 
+    @Autowired
+    private APIEmployeeInfoRepository employeeInfoRepository;
+
+    @Autowired
+    private APIEmployeeInfoActionLogRepository employeeInfoActionLogRepository;
+
     @Override
-    public void syncEmployeeToLDAP(ADSyncDto employeeData) throws Exception {
+    public void syncEmployeeToAD(ADSyncDto employeeData) throws Exception {
         log.info("employeeNo: {}", employeeData.getEmployeeNo());
         APIEmployeeInfo employee = employeeData.getEmployeeInfo();
         String action = employeeData.getAction();
@@ -70,7 +82,9 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         switch (action) {
             case "C":
                 log.debug("創建新員工: {}", employee.getEmployeeNo());
-                createEmployee(dn, employee);
+                createEmployeeToDB(employeeData);
+                // createEmployeeToLDAP(dn, employee);
+                createEmployeeByPowerShell(dn, employee);
                 break;
             case "U":
                 log.debug("更新員工資訊: {}", employee.getEmployeeNo());
@@ -117,7 +131,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
     }
 
     @Override
-    public void syncOrganizationToLDAP(ADSyncDto organizationData) {
+    public void syncOrganizationToAD(ADSyncDto organizationData) {
         // List<OrganizationHierarchyDto> orgHierarchy =
         // organizationData.getOrgHierarchyDto();
         // for (OrganizationHierarchyDto org : orgHierarchy) {
@@ -238,7 +252,23 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         }
     }
 
-    private void createEmployee(Name dn, APIEmployeeInfo employee) throws Exception {
+    private void createEmployeeToDB(ADSyncDto employeeData) {
+        APIEmployeeInfo existingEmployee = employeeInfoRepository
+                .findByEmployeeNo(employeeData.getEmployeeInfo().getEmployeeNo());
+        if (existingEmployee != null) {
+            log.info("員工已存在於數據庫: {}", employeeData.getEmployeeInfo().getEmployeeNo());
+            return;
+        }
+
+        employeeInfoRepository.save(employeeData.getEmployeeInfo());
+        employeeInfoActionLogRepository.save(
+                new APIEmployeeInfoActionLog(employeeData.getEmployeeInfo().getEmployeeNo(), "C", "employeeNo", null,
+                        null));
+
+        log.info("成功創建員工: {}", employeeData.getEmployeeInfo().getEmployeeNo());
+    }
+
+    private void createEmployeeToLDAP(Name dn, APIEmployeeInfo employee) throws Exception {
         LdapContext ctx = null;
         try {
             ctx = getLdapContext();
@@ -265,15 +295,23 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
             addAttributeIfNotNull(attrs, "mobile", employee.getMobilePhoneNo());
             addAttributeIfNotNull(attrs, "title", employee.getJobTitleName());
 
+            // // 設置 userAccountControl 為 512（啟用帳戶）
+            // attrs.put("userAccountControl", "512");
+
+            // // 設置預設密碼
+            // String password = "\"P@ssw0rd\""; // 密碼必須用雙引號包圍
+            // byte[] passwordBytes = password.getBytes(StandardCharsets.UTF_16LE); //
+            // UTF-16LE 編碼
+            // String encodedPassword = Base64.getEncoder().encodeToString(passwordBytes);
+            // // Base64 編碼
+            // attrs.put("unicodePwd", encodedPassword);
+
             // 創建用戶
             ctx.createSubcontext(dn, attrs);
             log.info("成功創建 LDAP 帳號: {}", dn);
 
             // 添加 proxyAddresses
             addProxyAddresses(ctx, dn, employee);
-
-            // 啟用帳號 TODO: 需要連線到 AAD 執行, 機制可能會不同
-            // enableAccount(ctx, dn);
 
             // 設置密碼 TODO: 需要連線到 AAD 執行, 機制可能會不同
             // setUserPassword(ctx, dn, employee);
@@ -454,5 +492,266 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         boolean hasSpecialChar = password.matches(".*[!@#$%^&*()_+\\-=\\[\\]{};':\"\\\\|,.<>\\/?].*");
 
         return hasUppercase && hasLowercase && hasDigit && hasSpecialChar;
+    }
+
+    @Override
+    public void enableAADE1Account(String baseDate) throws Exception {
+        List<APIEmployeeInfoActionLog> employeeInfoActionLogList = employeeInfoActionLogRepository
+                .findByAndActionAndCreatedDate("C", baseDate);
+
+        for (APIEmployeeInfoActionLog actionLog : employeeInfoActionLogList) {
+            try {
+                log.info("啟用員工帳號: {}", actionLog.getEmployeeNo());
+                LdapContext ctx = getLdapContext();
+
+            } catch (NamingException e) {
+                log.error("啟用員工帳號時發生錯誤: {}", e.getMessage());
+            }
+        }
+
+    }
+
+    @Override
+    public void disableAADE1Account(String baseDate) throws Exception {
+        List<APIEmployeeInfoActionLog> employeeInfoActionLogList = employeeInfoActionLogRepository
+                .findByAndActionAndCreatedDate("D", baseDate);
+
+        for (APIEmployeeInfoActionLog actionLog : employeeInfoActionLogList) {
+            try {
+                log.info("啟用員工帳號: {}", actionLog.getEmployeeNo());
+                LdapContext ctx = getLdapContext();
+
+            } catch (NamingException e) {
+                log.error("啟用員工帳號時發生錯誤: {}", e.getMessage());
+            }
+        }
+    }
+
+    private void createEmployeeByPowerShell(Name dn, APIEmployeeInfo employee) throws Exception {
+        log.info("開始建立 AD 帳號，使用 PowerShell 方式: {}", employee.getEmployeeNo());
+
+        try {
+            // 準備 OU 路徑 (需要反轉 DN 並移除 CN 部分)
+            StringBuilder ouPathBuilder = new StringBuilder();
+            List<String> dnParts = new ArrayList<>();
+
+            // 將 LdapName 轉換為列表並反轉順序
+            for (int i = 0; i < dn.size(); i++) {
+                String part = dn.get(i);
+                if (part.startsWith("OU=") || part.startsWith("ou=")) {
+                    dnParts.add(part);
+                }
+            }
+
+            // 反轉 OU 順序（從頂層 OU 到底層 OU）
+            for (int i = dnParts.size() - 1; i >= 0; i--) {
+                ouPathBuilder.append(dnParts.get(i));
+                if (i > 0) {
+                    ouPathBuilder.append(",");
+                }
+            }
+
+            // 添加 DC 部分
+            String[] baseDnParts = ldapBaseDn.split(",");
+            for (String part : baseDnParts) {
+                if (part.startsWith("DC=") || part.startsWith("dc=")) {
+                    if (ouPathBuilder.length() > 0) {
+                        ouPathBuilder.append(",");
+                    }
+                    ouPathBuilder.append(part);
+                }
+            }
+
+            String ouPath = ouPathBuilder.toString();
+            log.debug("建立的 OU 路徑: {}", ouPath);
+
+            // 確保 OU 結構存在
+            ensureOUStructurePowerShell(ouPath, employee);
+
+            // 拼接 PowerShell 指令
+            StringBuilder powershellCmd = new StringBuilder();
+
+            // 匯入 AD 模組
+            powershellCmd.append("Import-Module ActiveDirectory; ");
+
+            // 建立使用者
+            powershellCmd.append("New-ADUser ");
+            powershellCmd.append("-Name '").append(employee.getEmployeeNo()).append("' ");
+            powershellCmd.append("-SamAccountName '").append(employee.getEmployeeNo()).append("' ");
+
+            // 添加基本屬性
+            if (employee.getFullName() != null && !employee.getFullName().trim().isEmpty()) {
+                powershellCmd.append("-DisplayName '").append(employee.getFullName()).append("' ");
+            }
+
+            powershellCmd.append("-UserPrincipalName '").append(employee.getEmployeeNo()).append("@sogo.com.tw' ");
+
+            // 設定 OU 路徑
+            powershellCmd.append("-Path '").append(ouPath).append("' ");
+
+            // 設定其他屬性
+            powershellCmd.append("-EmailAddress '").append(employee.getEmployeeNo()).append("@sogo.com.tw' ");
+
+            if (employee.getOfficePhone() != null && !employee.getOfficePhone().trim().isEmpty()) {
+                powershellCmd.append("-OfficePhone '").append(employee.getOfficePhone()).append("' ");
+            }
+
+            if (employee.getMobilePhoneNo() != null && !employee.getMobilePhoneNo().trim().isEmpty()) {
+                powershellCmd.append("-MobilePhone '").append(employee.getMobilePhoneNo()).append("' ");
+            }
+
+            if (employee.getJobTitleName() != null && !employee.getJobTitleName().trim().isEmpty()) {
+                powershellCmd.append("-Title '").append(employee.getJobTitleName()).append("' ");
+            }
+
+            // 設定密碼和啟用帳號
+            String password = "Sogo$" + employee.getIdNoSuffix();
+            powershellCmd.append("-AccountPassword (ConvertTo-SecureString -AsPlainText '").append(password)
+                    .append("' -Force) ");
+            powershellCmd.append("-Enabled $true ");
+            powershellCmd.append("-PasswordNeverExpires $false ");
+            powershellCmd.append("-CannotChangePassword $false; ");
+
+            // 添加 proxyAddresses
+            powershellCmd.append("Set-ADUser ").append(employee.getEmployeeNo()).append(" ");
+            powershellCmd.append("-Add @{ProxyAddresses=@(");
+            powershellCmd.append("'SMTP:").append(employee.getEmployeeNo()).append("@sogo.com.tw', ");
+            powershellCmd.append("'smtp:").append(employee.getEmployeeNo()).append("@mail.sogo.com.tw', ");
+            powershellCmd.append("'smtp:").append(employee.getEmployeeNo()).append("@gardencity.com.tw'");
+            powershellCmd.append(")}");
+
+            // 執行 PowerShell 指令
+            String result = executePowerShellCommand(powershellCmd.toString());
+            log.info("PowerShell 執行結果: {}", result);
+
+            log.info("成功建立 AD 帳號: {}", employee.getEmployeeNo());
+        } catch (Exception e) {
+            log.error("建立 AD 帳號失敗: {}, 錯誤: {}", employee.getEmployeeNo(), e.getMessage());
+            throw new Exception("建立 AD 帳號失敗: " + e.getMessage(), e);
+        }
+
+    }
+
+    private void ensureOUStructurePowerShell(String ouPath, APIEmployeeInfo employee) throws Exception {
+        log.debug("開始確保 OU 結構存在（PowerShell）: {}", ouPath);
+        
+        try {
+            // 解析 OU 路徑
+            String[] ouParts = ouPath.split(",");
+            
+            // 找出所有 DC 部分，構建域基本路徑
+            StringBuilder domainPath = new StringBuilder();
+            for (String part : ouParts) {
+                if (part.startsWith("DC=") || part.startsWith("dc=")) {
+                    if (domainPath.length() > 0) {
+                        domainPath.append(",");
+                    }
+                    domainPath.append(part);
+                }
+            }
+            
+            // 將 OU 部分按照從上到下的層次排序
+            List<String> ouPartsList = new ArrayList<>();
+            for (String part : ouParts) {
+                if (part.startsWith("OU=") || part.startsWith("ou=")) {
+                    ouPartsList.add(part);
+                }
+            }
+            
+            // 逐層建立 OU 結構
+            String currentPath = domainPath.toString(); // 從域根開始
+            
+            // 從最外層 OU 開始，依次建立內層 OU
+            for (int i = ouPartsList.size() - 1; i >= 0; i--) {
+                String ouPart = ouPartsList.get(i);
+                String ouName = ouPart.substring(3); // 移除 "OU=" 前綴
+                
+                // 構建當前 OU 的完整路徑
+                String fullOuPath = ouPart + "," + currentPath;
+                
+                // 檢查此 OU 是否存在
+                String ouCheckCmd = String.format(
+                    "Import-Module ActiveDirectory; " +
+                    "if (Get-ADOrganizationalUnit -Filter {DistinguishedName -eq '%s'} -ErrorAction SilentlyContinue) { " +
+                    "    Write-Output 'EXISTS' " +
+                    "} else { " +
+                    "    Write-Output 'NOT_EXISTS' " +
+                    "}", 
+                    fullOuPath);
+                
+                String result = executePowerShellCommand(ouCheckCmd);
+                log.debug("檢查 OU 存在結果: {}, {}", fullOuPath, result);
+                
+                // 如果不存在，則建立
+                if (result.contains("NOT_EXISTS")) {
+                    // 檢查是否是最內層 OU (即索引為0的OU)，如果是則添加描述
+                    boolean isInnerMostOu = (i == 0);
+                    
+                    StringBuilder createOuCmd = new StringBuilder();
+                    createOuCmd.append("Import-Module ActiveDirectory; ");
+                    createOuCmd.append("New-ADOrganizationalUnit -Name '").append(ouName).append("' ");
+                    createOuCmd.append("-Path '").append(currentPath).append("' ");
+                    
+                    // 如果是最內層 OU，添加組織代碼描述
+                    if (isInnerMostOu && employee != null && employee.getFormulaOrgCode() != null) {
+                        createOuCmd.append("-Description 'orgCode=").append(employee.getFormulaOrgCode()).append("' ");
+                    }
+                    
+                    createOuCmd.append("-ProtectedFromAccidentalDeletion $false");
+                    
+                    String createResult = executePowerShellCommand(createOuCmd.toString());
+                    log.info("建立 OU 結果: {}, {}", ouName, createResult);
+                }
+                
+                // 更新當前路徑，為下一層 OU 的建立做準備
+                currentPath = fullOuPath;
+            }
+        } catch (Exception e) {
+            log.error("確保 OU 結構時發生錯誤: {}", e.getMessage());
+            throw new Exception("確保 OU 結構失敗: " + e.getMessage(), e);
+        }
+    
+    }
+
+    /**
+     * 執行 PowerShell 命令並返回結果
+     */
+    private String executePowerShellCommand(String command) throws Exception {
+        log.debug("執行 PowerShell 命令: {}", command);
+
+        try {
+            // 建立 PowerShell 執行程序
+            String[] commandArgs = {
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-ExecutionPolicy", "Bypass",
+                    "-Command", command
+            };
+
+            ProcessBuilder processBuilder = new ProcessBuilder(commandArgs);
+            processBuilder.redirectErrorStream(true);
+
+            Process process = processBuilder.start();
+
+            // 讀取輸出
+            StringBuilder output = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    output.append(line).append(System.lineSeparator());
+                }
+            }
+
+            // 等待程序完成
+            int exitCode = process.waitFor();
+            if (exitCode != 0) {
+                log.warn("PowerShell 命令執行結束，退出碼: {}", exitCode);
+            }
+
+            return output.toString().trim();
+        } catch (IOException | InterruptedException e) {
+            log.error("執行 PowerShell 命令失敗: {}", e.getMessage());
+            throw new Exception("執行 PowerShell 命令失敗: " + e.getMessage(), e);
+        }
     }
 }
