@@ -7,7 +7,4 @@ public interface ADLDAPSyncService {
 
     void syncOrganizationToAD(ADSyncDto organizationData) throws Exception;
 
-    void enableAADE1Account(String baseDate) throws Exception;
-
-    void disableAADE1Account(String baseDate) throws Exception;
 }

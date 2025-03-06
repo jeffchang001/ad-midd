@@ -494,38 +494,6 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         return hasUppercase && hasLowercase && hasDigit && hasSpecialChar;
     }
 
-    @Override
-    public void enableAADE1Account(String baseDate) throws Exception {
-        List<APIEmployeeInfoActionLog> employeeInfoActionLogList = employeeInfoActionLogRepository
-                .findByAndActionAndCreatedDate("C", baseDate);
-
-        for (APIEmployeeInfoActionLog actionLog : employeeInfoActionLogList) {
-            try {
-                log.info("啟用員工帳號: {}", actionLog.getEmployeeNo());
-                LdapContext ctx = getLdapContext();
-
-            } catch (NamingException e) {
-                log.error("啟用員工帳號時發生錯誤: {}", e.getMessage());
-            }
-        }
-
-    }
-
-    @Override
-    public void disableAADE1Account(String baseDate) throws Exception {
-        List<APIEmployeeInfoActionLog> employeeInfoActionLogList = employeeInfoActionLogRepository
-                .findByAndActionAndCreatedDate("D", baseDate);
-
-        for (APIEmployeeInfoActionLog actionLog : employeeInfoActionLogList) {
-            try {
-                log.info("啟用員工帳號: {}", actionLog.getEmployeeNo());
-                LdapContext ctx = getLdapContext();
-
-            } catch (NamingException e) {
-                log.error("啟用員工帳號時發生錯誤: {}", e.getMessage());
-            }
-        }
-    }
 
     private void createEmployeeByPowerShell(Name dn, APIEmployeeInfo employee) throws Exception {
         log.info("開始建立 AD 帳號，使用 PowerShell 方式: {}", employee.getEmployeeNo());

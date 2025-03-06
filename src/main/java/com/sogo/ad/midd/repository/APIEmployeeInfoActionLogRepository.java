@@ -22,6 +22,12 @@ public interface APIEmployeeInfoActionLogRepository extends JpaRepository<APIEmp
        "AND log.action = :action")
     List<APIEmployeeInfoActionLog> findByAndActionAndCreatedDate(String action, @Param("date")String createdDate);
 
+    @Query("SELECT log FROM APIEmployeeInfoActionLog log " +
+       "WHERE function('to_char', log.createdDate, 'YYYY-MM-DD') = :date " +
+       "AND log.action = :action " + 
+       "AND log.employeeNo = :employeeNo")
+    List<APIEmployeeInfoActionLog> findByEmployeeNoAndActionAndCreatedDate(String employeeNo, String action, @Param("date")String createdDate);
+
     List<APIEmployeeInfoActionLog> findByAction(String action);
 
 }

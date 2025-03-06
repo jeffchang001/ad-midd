@@ -23,6 +23,7 @@ import org.springframework.web.util.UriComponentsBuilder;
 
 import com.sogo.ad.midd.model.dto.ADSyncDto;
 import com.sogo.ad.midd.service.ADLDAPSyncService;
+import com.sogo.ad.midd.service.AzureADService;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -40,6 +41,7 @@ public class ADSyncController {
 
     private final RestTemplate restTemplate;
     private final ADLDAPSyncService adldapSyncService;
+    private final AzureADService azureADService;
 
     @Value("${ad.sync.base-url}")
     private String baseUrl;
@@ -94,6 +96,11 @@ public class ADSyncController {
     }
 
     private void processADSyncData(List<ADSyncDto> syncDataList) {
+
+        // TODO: 處理組織同步
+        // adldapSyncService.syncOrganizationToAD(adSyncDto);
+
+        // 處理員工同步
         for (ADSyncDto adSyncDto : syncDataList) {
             try {
                 if (adSyncDto.getOrgHierarchyDto() == null || adSyncDto.getOrgHierarchyDto().isEmpty()) {
@@ -106,8 +113,6 @@ public class ADSyncController {
                     adldapSyncService.syncEmployeeToAD(adSyncDto);
                 }
 
-                // TODO: 處理組織同步
-                // adldapSyncService.syncOrganizationToAD(adSyncDto);
             } catch (NamingException e) {
                 handleSyncException("LDAP操作錯誤", adSyncDto, e);
             } catch (Exception e) {
@@ -120,4 +125,42 @@ public class ADSyncController {
         log.error("{}, 員工編號: {}", errorType, adSyncDto.getEmployeeNo(), e);
         // 可以選擇在這裡添加更多的錯誤處理邏輯，例如發送通知或記錄到數據庫
     }
+
+    @PostMapping("/employees/enable-e1Account")
+	@Operation(summary = "啟用員工 AAD E1 帳號授權", description = "取得指定同步日期的員工資訊, 同步啟用員工 AAD E1 帳號授權")
+	@ApiResponse(responseCode = "200", description = "同步啟用員工 AAD E1 帳號授權成功")
+	@ApiResponse(responseCode = "400", description = "同步啟用員工 AAD E1 帳號授權失敗")
+	@ApiResponse(responseCode = "500", description = "內部伺服器錯誤")
+	public ResponseEntity<String> enableE1Account(
+			@Parameter(description = "員工編號") @RequestParam(name = "employee-no", defaultValue = "") String employeeNo,
+			@Parameter(description = "基準日期：日期之後的資料", schema = @Schema(type = "string", format = "date", example = "2025-02-28")) 
+			@RequestParam(name = "base-date", required = true) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate baseDate) {
+		try {
+			azureADService.enableAADE1Account(employeeNo, baseDate.toString());
+
+			return ResponseEntity.ok("啟用員工 AAD E1 帳號授權成功");
+		} catch (Exception e) {
+			log.error("啟用員工 AAD E1 帳號授權過程中發生未知錯誤", e);
+			return ResponseEntity.internalServerError().body("啟用員工 AAD E1 帳號授權過程中發生未知錯誤");
+		}
+	}
+
+    @PostMapping("/employees/disable-e1Account")
+	@Operation(summary = "停用員工 AAD E1 帳號授權", description = "取得指定同步日期的員工資訊, 停用員工 AAD E1 帳號授權")
+	@ApiResponse(responseCode = "200", description = "同步停用員工 AAD E1 帳號授權成功")
+	@ApiResponse(responseCode = "400", description = "同步停用員工 AAD E1 帳號授權失敗")
+	@ApiResponse(responseCode = "500", description = "內部伺服器錯誤")
+	public ResponseEntity<String> disableE1Account(
+			@Parameter(description = "員工編號") @RequestParam(name = "employee-no", defaultValue = "") String employeeNo,
+			@Parameter(description = "基準日期：日期之後的資料", schema = @Schema(type = "string", format = "date", example = "2025-02-28")) 
+			@RequestParam(name = "base-date", required = true) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate baseDate) {
+		try {
+			azureADService.disableAADE1Account(employeeNo, baseDate.toString());
+
+			return ResponseEntity.ok("停用員工 AAD E1 帳號授權成功");
+		} catch (Exception e) {
+			log.error("停用員工 AAD E1 帳號授權過程中發生未知錯誤", e);
+			return ResponseEntity.internalServerError().body("停用員工 AAD E1 帳號授權過程中發生未知錯誤");
+		}
+	}
 }
