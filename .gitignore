@@ -37,4 +37,4 @@ build/
 *.log
 
 ### mac os ###
-*.DS_Store
+.DS_Store
