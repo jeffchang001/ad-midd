@@ -22,6 +22,7 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import com.sogo.ad.midd.model.dto.ADEmployeeSyncDto;
+import com.sogo.ad.midd.model.dto.ADOrganizationSyncDto;
 import com.sogo.ad.midd.service.ADLDAPSyncService;
 import com.sogo.ad.midd.service.AzureADService;
 
@@ -157,5 +158,77 @@ public class ADSyncController {
             log.error("停用員工 AAD E1 帳號授權過程中發生未知錯誤", e);
             return ResponseEntity.internalServerError().body("停用員工 AAD E1 帳號授權過程中發生未知錯誤");
         }
+    }
+
+    @PostMapping("/process-ad-organization-data")
+    @Operation(summary = "處理 AD 組織同步數據", description = "從伺服器獲取 AD 組織同步數據並進行處理")
+    @ApiResponse(responseCode = "200", description = "同步組織成功完成")
+    @ApiResponse(responseCode = "204", description = "沒有組織數據需要同步")
+    @ApiResponse(responseCode = "500", description = "同步過程中發生錯誤")
+    public ResponseEntity<String> syncADOrganizationData(
+            @Parameter(description = "基準日期：日期之後的資料", schema = @Schema(type = "string", format = "date", example = "2025-03-07")) @RequestParam(name = "base-date", required = true) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate baseDate) {
+        try {
+            List<ADOrganizationSyncDto> syncDataList = fetchADOrganizationSyncData(baseDate);
+            if (syncDataList == null || syncDataList.isEmpty()) {
+                return ResponseEntity.noContent().build();
+            }
+            log.info("獲取到 {} 條 AD 組織同步數據", syncDataList.size());
+            processADOrganizationSyncData(syncDataList);
+            return ResponseEntity.ok("組織同步成功完成");
+        } catch (Exception e) {
+            log.error("AD 組織同步過程中發生錯誤", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("組織同步過程中發生錯誤: " + e.getMessage());
+        }
+    }
+
+    private List<ADOrganizationSyncDto> fetchADOrganizationSyncData(LocalDate baseDate) {
+        String apiUrl = baseUrl + "/api/v1/ad-organization-sync-data";
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("Authorization", token);
+
+        Map<String, String> params = new HashMap<>();
+        params.put("base-date", baseDate != null ? baseDate.toString().trim() : "");
+
+        UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(apiUrl);
+        if (params != null) {
+            params.forEach(builder::queryParam);
+        }
+
+        HttpEntity<String> entity = new HttpEntity<>(headers);
+
+        ResponseEntity<List<ADOrganizationSyncDto>> response = restTemplate.exchange(
+                builder.toUriString(),
+                HttpMethod.GET,
+                entity,
+                new ParameterizedTypeReference<List<ADOrganizationSyncDto>>() {
+                });
+
+        return response.getBody();
+    }
+
+    private void processADOrganizationSyncData(List<ADOrganizationSyncDto> syncDataList) {
+        // 處理組織同步
+        for (ADOrganizationSyncDto orgSyncDto : syncDataList) {
+            try {
+                if (orgSyncDto.getOrgHierarchyDto() == null || orgSyncDto.getOrgHierarchyDto().isEmpty()) {
+                    log.info("組織層級資訊為空, 組織代碼: {}", orgSyncDto.getOrgCode());
+                    continue;
+                } else {
+                    log.info("處理組織同步數據, 組織代碼: {}, 組織名稱: {}",
+                            orgSyncDto.getOrgCode(), orgSyncDto.getOrganization().getOrgName());
+
+                    adldapSyncService.syncOrganizationToAD(orgSyncDto);
+                }
+            } catch (NamingException e) {
+                handleOrganizationSyncException("LDAP操作錯誤", orgSyncDto, e);
+            } catch (Exception e) {
+                handleOrganizationSyncException("未預期的錯誤", orgSyncDto, e);
+            }
+        }
+    }
+
+    private void handleOrganizationSyncException(String errorType, ADOrganizationSyncDto orgSyncDto, Exception e) {
+        log.error("{}, 組織代碼: {}", errorType, orgSyncDto.getOrgCode(), e);
+        // 可以選擇在這裡添加更多的錯誤處理邏輯，例如發送通知或記錄到數據庫
     }
 }

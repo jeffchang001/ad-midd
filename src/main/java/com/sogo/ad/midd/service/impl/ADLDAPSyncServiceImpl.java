@@ -3,7 +3,6 @@ package com.sogo.ad.midd.service.impl;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Hashtable;
@@ -37,12 +36,15 @@ import org.springframework.ldap.support.LdapNameBuilder;
 import org.springframework.stereotype.Service;
 
 import com.sogo.ad.midd.model.dto.ADEmployeeSyncDto;
+import com.sogo.ad.midd.model.dto.ADOrganizationSyncDto;
 import com.sogo.ad.midd.model.dto.OrganizationHierarchyDto;
 import com.sogo.ad.midd.model.entity.APIEmployeeInfo;
 import com.sogo.ad.midd.model.entity.APIEmployeeInfoActionLog;
+import com.sogo.ad.midd.model.entity.APIOrganization;
 import com.sogo.ad.midd.repository.APIEmployeeInfoActionLogRepository;
 import com.sogo.ad.midd.repository.APIEmployeeInfoRepository;
 import com.sogo.ad.midd.service.ADLDAPSyncService;
+import com.sogo.ad.midd.service.AzureADService;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -61,6 +63,9 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
 
     @Value("${ldap.password}")
     private String ldapPassword;
+
+    @Autowired
+    private AzureADService azureADService;
 
     @Autowired
     private APIEmployeeInfoRepository employeeInfoRepository;
@@ -89,11 +94,11 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
             case "U":
                 log.debug("更新員工資訊: {}", employee.getEmployeeNo());
                 ctx = getLdapContext();
-                // updateEmployee(ctx, employee, employeeData.getUpdatedFields());
+                updateEmployee(ctx, employee, employeeData.getUpdatedFields());
                 break;
             case "D":
                 log.debug("停用員工: {}", employee.getEmployeeNo());
-                // disableEmployee(dn);
+                disableADAccount(dn);
                 break;
             default:
                 log.error("未知的操作類型: {}", action);
@@ -128,16 +133,6 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         }
 
         return ctx;
-    }
-
-    @Override
-    public void syncOrganizationToAD(ADEmployeeSyncDto organizationData) {
-        // List<OrganizationHierarchyDto> orgHierarchy =
-        // organizationData.getOrgHierarchyDto();
-        // for (OrganizationHierarchyDto org : orgHierarchy) {
-        // Name dn = buildOrganizationDn(org.getOrgCode());
-        // updateOrganization(dn, org);
-        // }
     }
 
     /**
@@ -178,11 +173,15 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
 
             SearchControls searchControls = new SearchControls();
             searchControls.setSearchScope(SearchControls.SUBTREE_SCOPE);
-            String[] returnedAtts = { "cn", "displayName", "mail", "telephoneNumber", "mobile", "title" };
+            String[] returnedAtts = { "cn", "displayName", "mail", "telephoneNumber", "mobile", "title",
+                    "userAccountControl" };
             searchControls.setReturningAttributes(returnedAtts);
 
             String searchFilter = String.format("(&(objectClass=person)(cn=%s))", employee.getEmployeeNo());
             log.debug("LDAP 搜索過濾器: {}", searchFilter);
+
+            boolean employedStatusChanged = isEmployedStatusChanged(updatedFields);
+            boolean organizationChanged = isOrganizationChanged(updatedFields);
 
             do {
                 NamingEnumeration<SearchResult> results = ctx.search(ldapBaseDn, searchFilter, searchControls);
@@ -192,8 +191,38 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
                     String dn = searchResult.getNameInNamespace();
                     log.debug("找到員工 DN: {}", dn);
 
+                    // 處理組織變更 - 如果 formulaOrgCode 有變更，需要移動員工帳號到新組織
+                    if (organizationChanged) {
+                        handleOrganizationChange(ctx, employee, dn, updatedFields.get("formulaOrgCode"));
+                    }
+
+                    // 處理啟用狀態變更 - 如果 employedStatus 從非 1 變為 1，需要啟用帳號
+                    if (employedStatusChanged) {
+                        String newStatus = updatedFields.get("employedStatus");
+                        if ("1".equals(newStatus)) {
+                            log.info("員工狀態變更為啟用，啟用 AD 帳號: {}", employee.getEmployeeNo());
+                            enableADAccount(ctx, new LdapName(dn));
+
+                            // 重新啟用 Azure AD E1 帳號
+                            try {
+                                log.info("重新啟用員工 Azure AD E1 帳號: {}", employee.getEmployeeNo());
+                                azureADService.enableAADE1AccountProcessor(employee.getEmailAddress(),
+                                        employee.getIdNoSuffix());
+                            } catch (Exception e) {
+                                log.error("重新啟用 Azure AD E1 帳號失敗: {}", e.getMessage(), e);
+                            }
+                        }
+                    }
+
+                    // 處理一般屬性更新 (原有邏輯)
                     for (Map.Entry<String, String> entry : updatedFields.entrySet()) {
-                        String ldapAttribute = mapFieldToLdapAttribute(entry.getKey());
+                        String key = entry.getKey();
+                        // 跳過 formulaOrgCode 和 employedStatus，因為已單獨處理
+                        if ("formulaOrgCode".equals(key) || "employedStatus".equals(key)) {
+                            continue;
+                        }
+
+                        String ldapAttribute = mapFieldToLdapAttribute(key);
                         String value = entry.getValue();
 
                         if (ldapAttribute != null && value != null && !value.trim().isEmpty()) {
@@ -230,6 +259,60 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         }
     }
 
+    /**
+     * 檢查員工啟用狀態是否變更
+     */
+    private boolean isEmployedStatusChanged(Map<String, String> updatedFields) {
+        return updatedFields != null && updatedFields.containsKey("employedStatus");
+    }
+
+    /**
+     * 檢查組織是否變更
+     */
+    private boolean isOrganizationChanged(Map<String, String> updatedFields) {
+        return updatedFields != null && updatedFields.containsKey("formulaOrgCode");
+    }
+
+    /**
+     * 處理組織變更，將員工移動到新組織
+     */
+    private void handleOrganizationChange(LdapContext ctx, APIEmployeeInfo employee, String currentDn,
+            String newOrgCode) {
+        log.info("員工組織變更, 從原組織移動到新組織, 員工編號: {}, 新組織代碼: {}",
+                employee.getEmployeeNo(), newOrgCode);
+
+        try {
+            // 查找新組織的 DN
+            SearchResult newOrgResult = findOrganizationByOrgCode(ctx, newOrgCode);
+            if (newOrgResult == null) {
+                log.error("找不到新組織, 無法移動員工, 組織代碼: {}", newOrgCode);
+                return;
+            }
+
+            // 獲取新組織的 DN
+            String newOrgDn = newOrgResult.getNameInNamespace();
+            log.info("找到新組織 DN: {}", newOrgDn);
+
+            // 構建員工在新組織中的 DN
+            String employeeCN = "CN=" + employee.getEmployeeNo();
+            String newEmployeeDn = employeeCN + "," + newOrgDn;
+
+            // 如果舊 DN 和新 DN 相同，不需要移動
+            if (currentDn.equals(newEmployeeDn)) {
+                log.info("員工已在目標組織中，無需移動");
+                return;
+            }
+
+            // 移動員工到新組織
+            log.info("開始移動員工, 從 {} 到 {}", currentDn, newEmployeeDn);
+            ctx.rename(new LdapName(currentDn), new LdapName(newEmployeeDn));
+            log.info("成功移動員工到新組織");
+
+        } catch (NamingException e) {
+            log.error("移動員工到新組織時發生錯誤: {}", e.getMessage(), e);
+        }
+    }
+
     private String mapFieldToLdapAttribute(String field) {
         switch (field.toLowerCase()) {
             case "fullname":
@@ -244,10 +327,8 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
                 return "mobile";
             case "jobtitlename":
                 return "title";
-            // case "datamodifieddate": 2023版本AD才有
-            // return "whenChanged";
             default:
-                log.warn("未知的字段映射: {}", field);
+                log.info("未知的字段映射: {}", field);
                 return null;
         }
     }
@@ -295,27 +376,12 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
             addAttributeIfNotNull(attrs, "mobile", employee.getMobilePhoneNo());
             addAttributeIfNotNull(attrs, "title", employee.getJobTitleName());
 
-            // // 設置 userAccountControl 為 512（啟用帳戶）
-            // attrs.put("userAccountControl", "512");
-
-            // // 設置預設密碼
-            // String password = "\"P@ssw0rd\""; // 密碼必須用雙引號包圍
-            // byte[] passwordBytes = password.getBytes(StandardCharsets.UTF_16LE); //
-            // UTF-16LE 編碼
-            // String encodedPassword = Base64.getEncoder().encodeToString(passwordBytes);
-            // // Base64 編碼
-            // attrs.put("unicodePwd", encodedPassword);
-
             // 創建用戶
             ctx.createSubcontext(dn, attrs);
             log.info("成功創建 LDAP 帳號: {}", dn);
 
             // 添加 proxyAddresses
             addProxyAddresses(ctx, dn, employee);
-
-            // 設置密碼 TODO: 需要連線到 AAD 執行, 機制可能會不同
-            // setUserPassword(ctx, dn, employee);
-
         } finally {
             if (ctx != null) {
                 ctx.close();
@@ -388,7 +454,10 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         log.info("成功新增 proxyAddresses 屬性: {}", dn);
     }
 
-    private void enableAccount(LdapContext ctx, Name dn) throws NamingException {
+    /**
+     * 啟用 AD 帳號
+     */
+    private void enableADAccount(LdapContext ctx, Name dn) throws NamingException {
         try {
             // 檢查當前帳號狀態
             Attributes attrs = ctx.getAttributes(dn, new String[] { "userAccountControl" });
@@ -422,37 +491,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         }
     }
 
-    private void setUserPassword(LdapContext ctx, Name dn, APIEmployeeInfo employee) {
-        // TODO: 需要請客戶確認 AD server 是否啟用 SSL/TLS 加密, LDAP需要進行驗證才能正常執行; 若改用powershell方式,
-        // 可以不用 ssl, 但是部屬的時候要和該 AD 同網域, 不須登入驗證
-        try {
-
-            // 然後設置密碼 "Sogo$" + 身份證字號後四碼
-            String newPassword = "Sogo$" + employee.getIdNoSuffix();
-
-            // 密碼必須以 UTF-16LE 格式，並且包圍在雙引號內
-            String quotedPassword = "\"" + newPassword + "\"";
-            byte[] passwordBytes = quotedPassword.getBytes("UTF-16LE");
-
-            ModificationItem[] mods = new ModificationItem[1];
-            mods[0] = new ModificationItem(DirContext.REPLACE_ATTRIBUTE,
-                    new BasicAttribute("unicodePwd", passwordBytes));
-
-            ctx.modifyAttributes(dn, mods);
-            log.info("成功設置新密碼");
-
-            // 最後,如果需要,移除 PASSWD_NOTREQD 標誌
-            ModificationItem[] uacMods = new ModificationItem[1];
-            uacMods[0] = new ModificationItem(DirContext.REPLACE_ATTRIBUTE,
-                    new BasicAttribute("userAccountControl", "512")); // 512 (NORMAL_ACCOUNT)
-            ctx.modifyAttributes(dn, uacMods);
-
-        } catch (NamingException | UnsupportedEncodingException e) {
-            log.error("設置密碼時發生錯誤: {}", e.getMessage());
-        }
-    }
-
-    private void disableEmployee(Name dn) throws NamingException {
+    private void disableADAccount(Name dn) throws NamingException {
         LdapContext ctx = null;
         try {
             ctx = getLdapContext();
@@ -464,34 +503,11 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
             ctx.modifyAttributes(dn, mods);
 
             log.info("成功停用 LDAP 帳號: {}", dn);
-
-            // 可選：移動到停用的 OU
-            // Name newDn = LdapNameBuilder.newInstance(ldapBaseDn)
-            // .add("OU", "Disabled Accounts")
-            // .add(dn.get(dn.size() - 1))
-            // .build();
-            // ctx.rename(dn, newDn);
-            // log.info("已將停用的帳號移動到 Disabled Accounts OU: {}", newDn);
         } finally {
             if (ctx != null) {
                 ctx.close();
             }
         }
-    }
-
-    private boolean isPasswordValid(String password) {
-        // 檢查密碼長度
-        if (password.length() < 8) {
-            return false;
-        }
-
-        // 檢查是否包含大寫字母、小寫字母、數字和特殊字符
-        boolean hasUppercase = !password.equals(password.toLowerCase());
-        boolean hasLowercase = !password.equals(password.toUpperCase());
-        boolean hasDigit = password.matches(".*\\d.*");
-        boolean hasSpecialChar = password.matches(".*[!@#$%^&*()_+\\-=\\[\\]{};':\"\\\\|,.<>\\/?].*");
-
-        return hasUppercase && hasLowercase && hasDigit && hasSpecialChar;
     }
 
     private void createEmployeeByPowerShell(Name dn, APIEmployeeInfo employee) throws Exception {
@@ -722,4 +738,332 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
             throw new Exception("執行 PowerShell 命令失敗: " + e.getMessage(), e);
         }
     }
+
+    @Override
+    public void syncOrganizationToAD(ADOrganizationSyncDto organizationData) throws Exception {
+        log.info("開始同步組織到 AD, 組織代碼: {}", organizationData.getOrgCode());
+        APIOrganization organization = organizationData.getOrganization();
+        String action = organizationData.getAction();
+        List<OrganizationHierarchyDto> orgHierarchy = organizationData.getOrgHierarchyDto();
+
+        LdapContext ctx = null;
+        try {
+            ctx = getLdapContext();
+
+            // 檢查組織是否已存在
+            SearchResult existingOrg = findOrganizationByOrgCode(ctx, organization.getOrgCode());
+
+            switch (action) {
+                case "C":
+                    log.debug("創建新組織: {}", organization.getOrgCode());
+                    if (existingOrg != null) {
+                        log.info("組織已存在於 AD 中，OrgCode: {}, DN: {}",
+                                organization.getOrgCode(), existingOrg.getNameInNamespace());
+                        // 如果需要，可以更新現有組織屬性
+                        updateOrganizationAttributes(ctx, new LdapName(existingOrg.getNameInNamespace()), organization);
+                    } else {
+                        // 創建組織結構
+                        Name orgDn = buildOrganizationDn(organization.getOrgCode(), orgHierarchy);
+                        log.info("將建立組織的 DN: {}", orgDn.toString());
+                        createOrganizationToAD(ctx, orgDn, organization, orgHierarchy);
+                    }
+                    break;
+                case "U":
+                    log.debug("更新組織資訊: {}", organization.getOrgCode());
+                    if (existingOrg != null) {
+                        // 更新現有組織
+                        updateOrganization(ctx, new LdapName(existingOrg.getNameInNamespace()),
+                                organization, organizationData.getUpdatedFields());
+                    } else {
+                        log.warn("找不到要更新的組織: {}", organization.getOrgCode());
+                        // 如果找不到，可以選擇創建
+                        Name orgDn = buildOrganizationDn(organization.getOrgCode(), orgHierarchy);
+                        log.info("組織不存在，將建立新組織，DN: {}", orgDn.toString());
+                        createOrganizationToAD(ctx, orgDn, organization, orgHierarchy);
+                    }
+                    break;
+                case "D":
+                    log.debug("停用組織: {}", organization.getOrgCode());
+                    if (existingOrg != null) {
+                        // 停用現有組織
+                        disableOrganization(ctx, new LdapName(existingOrg.getNameInNamespace()), organization);
+                    } else {
+                        log.warn("找不到要停用的組織: {}", organization.getOrgCode());
+                    }
+                    break;
+                default:
+                    log.error("未知的操作類型: {}", action);
+                    throw new IllegalArgumentException("Unknown action: " + action);
+            }
+            log.info("完成同步組織資訊到 LDAP, 組織代碼: {}", organizationData.getOrgCode());
+        } finally {
+            if (ctx != null) {
+                try {
+                    ctx.close();
+                } catch (NamingException e) {
+                    log.error("關閉 LDAP 連接時發生錯誤", e);
+                }
+            }
+        }
+    }
+
+    /**
+     * 構建組織的 LDAP DN
+     * 
+     * @param orgCode      組織代碼
+     * @param orgHierarchy 組織層級列表
+     * @return 組織的 LDAP DN
+     */
+    private Name buildOrganizationDn(String orgCode, List<OrganizationHierarchyDto> orgHierarchy) {
+        LdapName baseDn = LdapNameBuilder.newInstance(ldapBaseDn).build();
+        LdapNameBuilder builder = LdapNameBuilder.newInstance();
+
+        // 排序組織層級，從最低層級（數字最大）到最高層級（數字最小）
+        List<OrganizationHierarchyDto> sortedOrgHierarchy = orgHierarchy.stream()
+                .sorted(Comparator.comparingInt(OrganizationHierarchyDto::getOrgLevel).reversed())
+                .collect(Collectors.toList());
+
+        // 建構 OU 部分
+        for (OrganizationHierarchyDto org : sortedOrgHierarchy) {
+            builder.add("OU", org.getOrgName());
+        }
+
+        // 合併 baseDn 和建構的 DN
+        return LdapNameBuilder.newInstance(baseDn)
+                .add(builder.build())
+                .build();
+    }
+
+    /**
+     * 創建組織到 AD
+     */
+    private void createOrganizationToAD(LdapContext ctx, Name dn, APIOrganization organization,
+            List<OrganizationHierarchyDto> orgHierarchy) throws NamingException {
+        log.debug("開始創建組織到 AD: {}", organization.getOrgCode());
+
+        // 確保所有父 OU 存在
+        ensureOUStructure(ctx, dn, organization);
+
+        // 創建組織屬性
+        Attributes attrs = new BasicAttributes();
+        Attribute objectClass = new BasicAttribute("objectClass");
+        objectClass.add("top");
+        objectClass.add("organizationalUnit");
+        attrs.put(objectClass);
+
+        // 添加組織名稱
+        attrs.put("ou", organization.getOrgName());
+
+        // 添加描述屬性，存儲 orgCode 以便後續查詢
+        attrs.put("description", "orgCode=" + organization.getOrgCode());
+
+        // 創建組織單位
+        ctx.createSubcontext(dn, attrs);
+        log.info("成功創建組織: {}", dn);
+    }
+
+    /**
+     * 更新組織屬性
+     */
+    private void updateOrganizationAttributes(LdapContext ctx, Name dn, APIOrganization organization)
+            throws NamingException {
+        log.debug("更新組織屬性: {}", dn);
+
+        ModificationItem[] mods = new ModificationItem[1];
+        mods[0] = new ModificationItem(DirContext.REPLACE_ATTRIBUTE,
+                new BasicAttribute("description", "orgCode=" + organization.getOrgCode()));
+
+        ctx.modifyAttributes(dn, mods);
+        log.info("成功更新組織屬性: {}", dn);
+    }
+
+    /**
+     * 確保 OU 結構存在（父級 OU）
+     */
+    private void ensureOUStructure(LdapContext ctx, Name dn, APIOrganization organization)
+            throws NamingException {
+        log.debug("開始確保 OU 結構: {}", dn);
+
+        // 獲取 OU 路徑的各部分
+        List<String> ouList = new ArrayList<>();
+        for (int i = 0; i < dn.size(); i++) {
+            String rdn = dn.get(i);
+            if (rdn.startsWith("OU=") || rdn.startsWith("ou=")) {
+                ouList.add(rdn.substring(3));
+            }
+        }
+        log.debug("OU 列表: {}", ouList);
+
+        // 從基礎 DN 開始，確保每一級 OU 都存在
+        Name currentDn = new LdapName(ldapBaseDn);
+        for (int i = ouList.size() - 1; i >= 0; i--) {
+            String ou = ouList.get(i);
+            currentDn.add("OU=" + ou);
+
+            try {
+                log.debug("嘗試查找 OU: {}", currentDn);
+                ctx.lookup(currentDn);
+                log.debug("OU 已存在: {}", currentDn);
+            } catch (NameNotFoundException e) {
+                log.debug("OU 不存在，創建: {}", currentDn);
+
+                // 創建 OU
+                Attributes ouAttrs = new BasicAttributes();
+                Attribute ouObjectClass = new BasicAttribute("objectClass");
+                ouObjectClass.add("top");
+                ouObjectClass.add("organizationalUnit");
+                ouAttrs.put(ouObjectClass);
+                ouAttrs.put("ou", ou);
+
+                // 只有當前層級的 OU 才添加 orgCode 描述，父層級 OU 不添加
+                if (i == 0) {
+                    ouAttrs.put("description", "orgCode=" + organization.getOrgCode());
+                }
+
+                ctx.createSubcontext(currentDn, ouAttrs);
+                log.info("成功創建組織單位: {}", currentDn);
+            }
+        }
+    }
+
+    /**
+     * 更新組織
+     */
+    private void updateOrganization(LdapContext ctx, Name dn, APIOrganization organization,
+            Map<String, String> updatedFields) throws NamingException {
+        log.debug("更新組織: {}, 更新欄位: {}", organization.getOrgCode(), updatedFields);
+
+        if (updatedFields == null || updatedFields.isEmpty()) {
+            log.info("沒有需要更新的欄位");
+            return;
+        }
+
+        // 準備修改項
+        List<ModificationItem> modItems = new ArrayList<>();
+
+        // 處理組織名稱變更 (特殊處理，需要重命名 OU)
+        if (updatedFields.containsKey("OrgName")) {
+            String newName = updatedFields.get("OrgName");
+            log.debug("需要更新組織名稱為: {}", newName);
+
+            // 變更 OU 的 RDN
+            Name newDn = getNewDnWithOUName(dn, newName);
+            ctx.rename(dn, newDn);
+            log.info("成功重命名組織: {} -> {}", dn, newDn);
+
+            // 更新 dn 引用，指向新的 DN
+            dn = newDn;
+        }
+
+        // 處理描述變更
+        if (updatedFields.containsKey("Remark")) {
+            String newRemark = updatedFields.get("Remark");
+            modItems.add(new ModificationItem(DirContext.REPLACE_ATTRIBUTE,
+                    new BasicAttribute("description", "orgCode=" + organization.getOrgCode() +
+                            ", " + newRemark)));
+        } else {
+            // 確保 orgCode 在描述中正確設置
+            modItems.add(new ModificationItem(DirContext.REPLACE_ATTRIBUTE,
+                    new BasicAttribute("description", "orgCode=" + organization.getOrgCode())));
+        }
+
+        // 處理其他屬性...
+
+        // 如果有屬性需要更新
+        if (!modItems.isEmpty()) {
+            ModificationItem[] mods = modItems.toArray(new ModificationItem[0]);
+            ctx.modifyAttributes(dn, mods);
+            log.info("成功更新組織屬性: {}", dn);
+        }
+    }
+
+    /**
+     * 根據新的 OU 名稱獲取新的 DN
+     */
+    private Name getNewDnWithOUName(Name oldDn, String newOUName) throws NamingException {
+        // 複製原始 DN，除了最後一個 RDN (即當前 OU)
+        Name parentDn = new LdapName(oldDn.toString()).getPrefix(oldDn.size() - 1);
+
+        // 創建新的 DN，添加帶有新名稱的 OU
+        return LdapNameBuilder.newInstance(parentDn)
+                .add("OU", newOUName)
+                .build();
+    }
+
+    /**
+     * 禁用組織
+     */
+    private void disableOrganization(LdapContext ctx, Name dn, APIOrganization organization)
+            throws NamingException {
+        log.debug("禁用組織: {}", organization.getOrgCode());
+
+        // 檢查是否有子物件
+        boolean hasChildren = checkForChildren(ctx, dn);
+
+        if (hasChildren) {
+            // 如果有子物件，僅標記為禁用狀態（更新描述）
+            ModificationItem[] mods = new ModificationItem[1];
+            mods[0] = new ModificationItem(DirContext.REPLACE_ATTRIBUTE,
+                    new BasicAttribute("description", "[DISABLED] orgCode=" + organization.getOrgCode()));
+
+            ctx.modifyAttributes(dn, mods);
+            log.info("組織有子物件，已標記為禁用狀態: {}", dn);
+        } else {
+            // 如果沒有子物件，可以刪除組織
+            ctx.destroySubcontext(dn);
+            log.info("成功刪除組織: {}", dn);
+        }
+    }
+
+    /**
+     * 檢查 OU 下是否有子物件
+     */
+    private boolean checkForChildren(LdapContext ctx, Name dn) throws NamingException {
+        SearchControls searchControls = new SearchControls();
+        searchControls.setSearchScope(SearchControls.ONELEVEL_SCOPE);
+        searchControls.setCountLimit(1); // 只需要找到一個就確認有子物件了
+
+        NamingEnumeration<SearchResult> results = ctx.search(dn, "(objectClass=*)", searchControls);
+        boolean hasChildren = results.hasMoreElements();
+        results.close();
+
+        return hasChildren;
+    }
+
+    /**
+     * 根據描述中的 orgCode 查找組織
+     */
+    private SearchResult findOrganizationByOrgCode(LdapContext ctx, String orgCode) throws NamingException {
+        log.debug("根據 orgCode 尋找組織: {}", orgCode);
+
+        SearchControls searchControls = new SearchControls();
+        searchControls.setSearchScope(SearchControls.SUBTREE_SCOPE);
+
+        // 精確匹配 orgCode
+        String searchFilter = "(description=*orgCode=" + orgCode + "*)";
+        log.debug("搜索過濾器: {}", searchFilter);
+
+        NamingEnumeration<SearchResult> results = ctx.search(ldapBaseDn, searchFilter, searchControls);
+
+        if (results.hasMoreElements()) {
+            SearchResult result = results.next();
+            log.info("找到組織 DN: {}", result.getNameInNamespace());
+
+            // 檢查是否找到多個結果
+            if (results.hasMoreElements()) {
+                log.warn("發現多個具有相同 orgCode 的組織: {}", orgCode);
+                while (results.hasMoreElements()) {
+                    log.warn("額外的組織 DN: {}", results.next().getNameInNamespace());
+                }
+            }
+
+            results.close();
+            return result;
+        }
+
+        log.debug("未找到 orgCode 為 {} 的組織", orgCode);
+        results.close();
+        return null;
+    }
+
 }

@@ -83,15 +83,17 @@ public class AzureADServiceImpl implements AzureADService {
         }
     }
 
-    private void enableAADE1AccountProcessor(String employeeEmail, String idNoSuffix) throws Exception {
+    @Override
+    public void enableAADE1AccountProcessor(String employeeEmail, String idNoSuffix) throws Exception {
         String userId = getUserIdByEmail(employeeEmail);
         String skuId = getSkuId();
         setUsageLocation(userId, "TW");
         assignE1License(userId, skuId, "C");
-        resetUserPassword(userId, "Sogo$"+idNoSuffix, true);
+        resetUserPassword(userId, "Sogo$" + idNoSuffix, true);
     }
 
-    private void disableAADE1AccountProcessor(String employeeEmail) throws Exception {
+    @Override
+    public void disableAADE1AccountProcessor(String employeeEmail) throws Exception {
         String userId = getUserIdByEmail(employeeEmail);
         String skuId = getSkuId();
         setUsageLocation(userId, "TW");
@@ -267,37 +269,37 @@ public class AzureADServiceImpl implements AzureADService {
             String accessToken = getAccessToken();
             // 注意: 這裡不再使用 /resetPassword 端點
             String url = "https://graph.microsoft.com/v1.0/users/" + userId;
-            
+
             HttpHeaders headers = new HttpHeaders();
             headers.setBearerAuth(accessToken);
             headers.setContentType(MediaType.APPLICATION_JSON);
-            
+
             // 創建密碼配置對象
             Map<String, Object> passwordProfile = new HashMap<>();
             passwordProfile.put("password", newPassword);
             passwordProfile.put("forceChangePasswordNextSignIn", forceChangePasswordNextSignIn);
-            
+
             // 創建主體對象
             Map<String, Object> bodyMap = new HashMap<>();
             bodyMap.put("passwordProfile", passwordProfile);
-            
+
             HttpEntity<Map<String, Object>> entity = new HttpEntity<>(bodyMap, headers);
-            
+
             // 使用 PATCH 方法更新用戶
             ResponseEntity<String> response = restTemplate.exchange(
-                    url, 
-                    HttpMethod.PATCH, 
-                    entity, 
+                    url,
+                    HttpMethod.PATCH,
+                    entity,
                     String.class);
-            
-            if (response.getStatusCode() == HttpStatus.OK || 
-                response.getStatusCode() == HttpStatus.NO_CONTENT) {
+
+            if (response.getStatusCode() == HttpStatus.OK ||
+                    response.getStatusCode() == HttpStatus.NO_CONTENT) {
                 log.info("成功重設用戶 {} 的密碼", userId);
             } else {
                 log.error("重設密碼失敗: {}", response.getStatusCode());
             }
         } catch (HttpClientErrorException e) {
-            log.error("重設用戶 {} 密碼時發生錯誤: {} - {}", 
+            log.error("重設用戶 {} 密碼時發生錯誤: {} - {}",
                     userId, e.getStatusCode(), e.getResponseBodyAsString());
         } catch (Exception e) {
             log.error("重設用戶 {} 密碼時發生錯誤: {}", userId, e.getMessage());
