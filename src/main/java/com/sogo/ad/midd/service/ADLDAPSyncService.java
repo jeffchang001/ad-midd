@@ -1,10 +1,10 @@
 package com.sogo.ad.midd.service;
 
-import com.sogo.ad.midd.model.dto.ADSyncDto;
+import com.sogo.ad.midd.model.dto.ADEmployeeSyncDto;
 
 public interface ADLDAPSyncService {
-    void syncEmployeeToAD(ADSyncDto employeeData) throws Exception;
+    void syncEmployeeToAD(ADEmployeeSyncDto employeeData) throws Exception;
 
-    void syncOrganizationToAD(ADSyncDto organizationData) throws Exception;
+    void syncOrganizationToAD(ADEmployeeSyncDto organizationData) throws Exception;
 
 }

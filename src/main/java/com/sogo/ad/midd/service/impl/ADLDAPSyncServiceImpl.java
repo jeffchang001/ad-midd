@@ -36,7 +36,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.ldap.support.LdapNameBuilder;
 import org.springframework.stereotype.Service;
 
-import com.sogo.ad.midd.model.dto.ADSyncDto;
+import com.sogo.ad.midd.model.dto.ADEmployeeSyncDto;
 import com.sogo.ad.midd.model.dto.OrganizationHierarchyDto;
 import com.sogo.ad.midd.model.entity.APIEmployeeInfo;
 import com.sogo.ad.midd.model.entity.APIEmployeeInfoActionLog;
@@ -69,7 +69,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
     private APIEmployeeInfoActionLogRepository employeeInfoActionLogRepository;
 
     @Override
-    public void syncEmployeeToAD(ADSyncDto employeeData) throws Exception {
+    public void syncEmployeeToAD(ADEmployeeSyncDto employeeData) throws Exception {
         log.info("employeeNo: {}", employeeData.getEmployeeNo());
         APIEmployeeInfo employee = employeeData.getEmployeeInfo();
         String action = employeeData.getAction();
@@ -131,7 +131,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
     }
 
     @Override
-    public void syncOrganizationToAD(ADSyncDto organizationData) {
+    public void syncOrganizationToAD(ADEmployeeSyncDto organizationData) {
         // List<OrganizationHierarchyDto> orgHierarchy =
         // organizationData.getOrgHierarchyDto();
         // for (OrganizationHierarchyDto org : orgHierarchy) {
@@ -252,7 +252,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         }
     }
 
-    private void createEmployeeToDB(ADSyncDto employeeData) {
+    private void createEmployeeToDB(ADEmployeeSyncDto employeeData) {
         APIEmployeeInfo existingEmployee = employeeInfoRepository
                 .findByEmployeeNo(employeeData.getEmployeeInfo().getEmployeeNo());
         if (existingEmployee != null) {
@@ -494,7 +494,6 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         return hasUppercase && hasLowercase && hasDigit && hasSpecialChar;
     }
 
-
     private void createEmployeeByPowerShell(Name dn, APIEmployeeInfo employee) throws Exception {
         log.info("開始建立 AD 帳號，使用 PowerShell 方式: {}", employee.getEmployeeNo());
 
@@ -602,11 +601,11 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
 
     private void ensureOUStructurePowerShell(String ouPath, APIEmployeeInfo employee) throws Exception {
         log.debug("開始確保 OU 結構存在（PowerShell）: {}", ouPath);
-        
+
         try {
             // 解析 OU 路徑
             String[] ouParts = ouPath.split(",");
-            
+
             // 找出所有 DC 部分，構建域基本路徑
             StringBuilder domainPath = new StringBuilder();
             for (String part : ouParts) {
@@ -617,7 +616,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
                     domainPath.append(part);
                 }
             }
-            
+
             // 將 OU 部分按照從上到下的層次排序
             List<String> ouPartsList = new ArrayList<>();
             for (String part : ouParts) {
@@ -625,52 +624,53 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
                     ouPartsList.add(part);
                 }
             }
-            
+
             // 逐層建立 OU 結構
             String currentPath = domainPath.toString(); // 從域根開始
-            
+
             // 從最外層 OU 開始，依次建立內層 OU
             for (int i = ouPartsList.size() - 1; i >= 0; i--) {
                 String ouPart = ouPartsList.get(i);
                 String ouName = ouPart.substring(3); // 移除 "OU=" 前綴
-                
+
                 // 構建當前 OU 的完整路徑
                 String fullOuPath = ouPart + "," + currentPath;
-                
+
                 // 檢查此 OU 是否存在
                 String ouCheckCmd = String.format(
-                    "Import-Module ActiveDirectory; " +
-                    "if (Get-ADOrganizationalUnit -Filter {DistinguishedName -eq '%s'} -ErrorAction SilentlyContinue) { " +
-                    "    Write-Output 'EXISTS' " +
-                    "} else { " +
-                    "    Write-Output 'NOT_EXISTS' " +
-                    "}", 
-                    fullOuPath);
-                
+                        "Import-Module ActiveDirectory; " +
+                                "if (Get-ADOrganizationalUnit -Filter {DistinguishedName -eq '%s'} -ErrorAction SilentlyContinue) { "
+                                +
+                                "    Write-Output 'EXISTS' " +
+                                "} else { " +
+                                "    Write-Output 'NOT_EXISTS' " +
+                                "}",
+                        fullOuPath);
+
                 String result = executePowerShellCommand(ouCheckCmd);
                 log.debug("檢查 OU 存在結果: {}, {}", fullOuPath, result);
-                
+
                 // 如果不存在，則建立
                 if (result.contains("NOT_EXISTS")) {
                     // 檢查是否是最內層 OU (即索引為0的OU)，如果是則添加描述
                     boolean isInnerMostOu = (i == 0);
-                    
+
                     StringBuilder createOuCmd = new StringBuilder();
                     createOuCmd.append("Import-Module ActiveDirectory; ");
                     createOuCmd.append("New-ADOrganizationalUnit -Name '").append(ouName).append("' ");
                     createOuCmd.append("-Path '").append(currentPath).append("' ");
-                    
+
                     // 如果是最內層 OU，添加組織代碼描述
                     if (isInnerMostOu && employee != null && employee.getFormulaOrgCode() != null) {
                         createOuCmd.append("-Description 'orgCode=").append(employee.getFormulaOrgCode()).append("' ");
                     }
-                    
+
                     createOuCmd.append("-ProtectedFromAccidentalDeletion $false");
-                    
+
                     String createResult = executePowerShellCommand(createOuCmd.toString());
                     log.info("建立 OU 結果: {}, {}", ouName, createResult);
                 }
-                
+
                 // 更新當前路徑，為下一層 OU 的建立做準備
                 currentPath = fullOuPath;
             }
@@ -678,7 +678,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
             log.error("確保 OU 結構時發生錯誤: {}", e.getMessage());
             throw new Exception("確保 OU 結構失敗: " + e.getMessage(), e);
         }
-    
+
     }
 
     /**
