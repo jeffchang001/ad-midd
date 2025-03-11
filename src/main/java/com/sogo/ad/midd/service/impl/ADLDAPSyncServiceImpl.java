@@ -205,12 +205,17 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
 
                             // 重新啟用 Azure AD E1 帳號
                             try {
+                                
+
                                 log.info("重新啟用員工 Azure AD E1 帳號: {}", employee.getEmployeeNo());
                                 azureADService.enableAADE1AccountProcessor(employee.getEmailAddress(),
                                         employee.getIdNoSuffix());
                             } catch (Exception e) {
                                 log.error("重新啟用 Azure AD E1 帳號失敗: {}", e.getMessage(), e);
                             }
+                        } else if ("2".equals(newStatus)) {
+                            log.info("員工狀態變更為留停，停用 AD 帳號: {}", employee.getEmployeeNo());
+                            disableADAccount(new LdapName(dn));
                         }
                     }
 
@@ -347,111 +352,6 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
                         null));
 
         log.info("成功創建員工: {}", employeeData.getEmployeeInfo().getEmployeeNo());
-    }
-
-    private void createEmployeeToLDAP(Name dn, APIEmployeeInfo employee) throws Exception {
-        LdapContext ctx = null;
-        try {
-            ctx = getLdapContext();
-
-            // 確保所有父 OU 存在
-            ensureOUStructure(ctx, dn, employee);
-
-            // 創建用戶屬性
-            Attributes attrs = new BasicAttributes();
-            Attribute objectClass = new BasicAttribute("objectClass");
-            objectClass.add("top");
-            objectClass.add("person");
-            objectClass.add("organizationalPerson");
-            objectClass.add("user");
-            attrs.put(objectClass);
-
-            // 添加其他屬性
-            addAttributeIfNotNull(attrs, "cn", employee.getEmployeeNo());
-            addAttributeIfNotNull(attrs, "sAMAccountName", employee.getEmployeeNo());
-            addAttributeIfNotNull(attrs, "userPrincipalName", employee.getEmployeeNo() + "@sogo.com.tw");
-            addAttributeIfNotNull(attrs, "displayName", employee.getFullName());
-            addAttributeIfNotNull(attrs, "mail", employee.getEmployeeNo() + "@sogo.com.tw");
-            addAttributeIfNotNull(attrs, "telephoneNumber", employee.getOfficePhone());
-            addAttributeIfNotNull(attrs, "mobile", employee.getMobilePhoneNo());
-            addAttributeIfNotNull(attrs, "title", employee.getJobTitleName());
-
-            // 創建用戶
-            ctx.createSubcontext(dn, attrs);
-            log.info("成功創建 LDAP 帳號: {}", dn);
-
-            // 添加 proxyAddresses
-            addProxyAddresses(ctx, dn, employee);
-        } finally {
-            if (ctx != null) {
-                ctx.close();
-            }
-        }
-    }
-
-    private void addAttributeIfNotNull(Attributes attrs, String attrName, String value) {
-        if (value != null && !value.trim().isEmpty()) {
-            attrs.put(attrName, value.trim());
-        }
-    }
-
-    private void ensureOUStructure(LdapContext ctx, Name dn, APIEmployeeInfo employee) throws NamingException {
-        log.debug("開始確保 OU 結構: {}", dn);
-        List<String> ouList = new ArrayList<>();
-        for (int i = 0; i < dn.size(); i++) {
-            String rdn = dn.get(i);
-            if (rdn.startsWith("OU=") || rdn.startsWith("ou=")) {
-                ouList.add(rdn.substring(3));
-            }
-        }
-        log.debug("OU 列表: {}", ouList);
-
-        Name currentDn = new LdapName(ldapBaseDn);
-        for (int i = 0; i < ouList.size(); i++) {
-            String ou = ouList.get(i);
-            currentDn.add("OU=" + ou);
-            try {
-                log.debug("嘗試查找 OU: {}", currentDn);
-                ctx.lookup(currentDn);
-                log.debug("OU 已存在: {}", currentDn);
-            } catch (NameNotFoundException e) {
-                log.debug("OU 不存在，嘗試創建: {}", currentDn);
-                Attributes ouAttrs = new BasicAttributes();
-                Attribute ouObjectClass = new BasicAttribute("objectClass");
-                ouObjectClass.add("top");
-                ouObjectClass.add("organizationalUnit");
-                ouAttrs.put(ouObjectClass);
-                ouAttrs.put("ou", ou);
-
-                // 添加 description 屬性, 只針對最後一個組織儲存組織代碼,
-                if (i == ouList.size() - 1) {
-                    ouAttrs.put("description", "orgCode=" + employee.getFormulaOrgCode());
-                }
-
-                try {
-                    ctx.createSubcontext(currentDn, ouAttrs);
-                    log.info("成功創建組織單位: {}", currentDn);
-                } catch (NamingException ne) {
-                    log.error("創建組織單位時發生錯誤: {}, 錯誤: {}", currentDn, ne.getMessage(), ne);
-                    throw ne;
-                }
-            } catch (NamingException ne) {
-                log.error("檢查 OU 結構時發生未知錯誤: {}, 錯誤: {}", currentDn, ne.getMessage(), ne);
-                throw ne;
-            }
-        }
-    }
-
-    private void addProxyAddresses(LdapContext ctx, Name dn, APIEmployeeInfo employee) throws NamingException {
-        ModificationItem[] proxyMods = new ModificationItem[1];
-        Attribute proxyAddresses = new BasicAttribute("proxyAddresses");
-        proxyAddresses.add("SMTP:" + employee.getEmployeeNo() + "@sogo.com.tw");
-        proxyAddresses.add("smtp:" + employee.getEmployeeNo() + "@mail.sogo.com.tw");
-        proxyAddresses.add("smtp:" + employee.getEmployeeNo() + "@gardencity.com.tw");
-        proxyMods[0] = new ModificationItem(DirContext.ADD_ATTRIBUTE, proxyAddresses);
-
-        ctx.modifyAttributes(dn, proxyMods);
-        log.info("成功新增 proxyAddresses 屬性: {}", dn);
     }
 
     /**
@@ -808,19 +708,19 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
     }
 
     /**
-     * 構建組織的 LDAP DN
-     * 
-     * @param orgCode      組織代碼
-     * @param orgHierarchy 組織層級列表
+     * 建構組織的 LDAP DN
+     *
+     * @param orgCode     組織代碼
+     * @param orgHierarchy 組織層級資訊
      * @return 組織的 LDAP DN
      */
     private Name buildOrganizationDn(String orgCode, List<OrganizationHierarchyDto> orgHierarchy) {
         LdapName baseDn = LdapNameBuilder.newInstance(ldapBaseDn).build();
         LdapNameBuilder builder = LdapNameBuilder.newInstance();
 
-        // 排序組織層級，從最低層級（數字最大）到最高層級（數字最小）
+        // 排序組織層級，從最高層級（數字最小）到最低層級（數字最大）
         List<OrganizationHierarchyDto> sortedOrgHierarchy = orgHierarchy.stream()
-                .sorted(Comparator.comparingInt(OrganizationHierarchyDto::getOrgLevel).reversed())
+                .sorted(Comparator.comparingInt(OrganizationHierarchyDto::getOrgLevel))
                 .collect(Collectors.toList());
 
         // 建構 OU 部分
@@ -896,7 +796,9 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
 
         // 從基礎 DN 開始，確保每一級 OU 都存在
         Name currentDn = new LdapName(ldapBaseDn);
-        for (int i = ouList.size() - 1; i >= 0; i--) {
+        // 由於 buildOrganizationDn 現在是從最高層級到最低層級排序，
+        // 所以這裡應該從第一個元素開始處理（從 0 到 ouList.size() - 1）
+        for (int i = 0; i < ouList.size(); i++) {
             String ou = ouList.get(i);
             currentDn.add("OU=" + ou);
 
@@ -915,8 +817,8 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
                 ouAttrs.put(ouObjectClass);
                 ouAttrs.put("ou", ou);
 
-                // 只有當前層級的 OU 才添加 orgCode 描述，父層級 OU 不添加
-                if (i == 0) {
+                // 只有最後一級的 OU 才添加 orgCode 描述，父層級 OU 不添加
+                if (i == ouList.size() - 1) {
                     ouAttrs.put("description", "orgCode=" + organization.getOrgCode());
                 }
 
