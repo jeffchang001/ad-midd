@@ -276,6 +276,7 @@ public class AzureADServiceImpl implements AzureADService {
 
             // 創建密碼配置對象
             Map<String, Object> passwordProfile = new HashMap<>();
+            passwordProfile.put("accountEnabled", Boolean.TRUE);
             passwordProfile.put("password", newPassword);
             passwordProfile.put("forceChangePasswordNextSignIn", forceChangePasswordNextSignIn);
 
