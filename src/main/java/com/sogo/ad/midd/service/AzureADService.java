@@ -9,5 +9,7 @@ public interface AzureADService {
     void enableAADE1AccountProcessor(String employeeEmail, String idNoSuffix) throws Exception;
 
     void disableAADE1AccountProcessor(String employeeEmail) throws Exception;
+    
+    void deleteAADE1AllAccountProcessor() throws Exception;
 
 }

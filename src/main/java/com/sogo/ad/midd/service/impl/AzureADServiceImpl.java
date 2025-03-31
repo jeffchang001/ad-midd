@@ -100,6 +100,84 @@ public class AzureADServiceImpl implements AzureADService {
         assignE1License(userId, skuId, "D");
     }
 
+    @Override
+    public void deleteAADE1AllAccountProcessor() throws Exception {
+        log.info("開始執行刪除所有 E1 帳戶的程序");
+        int successCount = 0;
+        int failCount = 0;
+
+        List<APIEmployeeInfo> aadAccountsList = employeeInfoRepository.findAll();
+        log.info("找到 {} 個待處理的帳戶", aadAccountsList.size());
+        
+        for (APIEmployeeInfo employeeInfo : aadAccountsList) {
+            try {
+                log.info("開始處理用戶: {}, 電子郵件: {}", employeeInfo.getEmployeeNo(), employeeInfo.getEmailAddress());
+                String userId = getUserIdByEmail(employeeInfo.getEmailAddress());
+                
+                if (userId == null || userId.isEmpty()) {
+                    log.warn("無法取得用戶 {} 的 ID，可能不存在於 Azure AD", employeeInfo.getEmailAddress());
+                    failCount++;
+                    continue;
+                }
+                
+                log.debug("設定用戶 {} 的使用地點", userId);
+                setUsageLocation(userId, "TW");
+                
+                log.debug("執行刪除用戶 {}", userId);
+                deleteAADE1Account(userId);
+                
+                log.info("成功刪除用戶: {}, 電子郵件: {}", employeeInfo.getEmployeeNo(), employeeInfo.getEmailAddress());
+                successCount++;
+            } catch (Exception e) {
+                log.error("處理用戶 {} ({}) 時發生錯誤: {}", 
+                         employeeInfo.getEmployeeNo(), 
+                         employeeInfo.getEmailAddress(), 
+                         e.getMessage(), e);
+                failCount++;
+            }
+        }
+        
+        log.info("刪除 E1 帳戶程序完成。成功: {}, 失敗: {}, 總計: {}", 
+                successCount, failCount, aadAccountsList.size());
+    }
+    
+    private void deleteAADE1Account(String userId) throws Exception {
+        log.info("開始刪除用戶 ID: {}", userId);
+        try {
+            String accessToken = getAccessToken();
+            String url = "https://graph.microsoft.com/v1.0/users/" + userId;
+            
+            HttpHeaders headers = new HttpHeaders();
+            headers.setBearerAuth(accessToken);
+            
+            HttpEntity<?> entity = new HttpEntity<>(headers);
+            
+            log.debug("發送刪除請求至 Azure AD Graph API: {}", url);
+            ResponseEntity<Void> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.DELETE,
+                    entity,
+                    Void.class);
+            
+            if (response.getStatusCode() == HttpStatus.NO_CONTENT) {
+                log.info("成功刪除使用者 {}", userId);
+            } else {
+                log.error("刪除使用者 {} 失敗: {}", userId, response.getStatusCode());
+                throw new Exception("刪除使用者失敗，HTTP狀態碼: " + response.getStatusCode());
+            }
+        } catch (HttpClientErrorException e) {
+            log.error("刪除使用者 {} 時發生 HTTP 錯誤: {} - {}", 
+                    userId, e.getStatusCode(), e.getResponseBodyAsString());
+            if (e.getStatusCode() == HttpStatus.NOT_FOUND) {
+                log.warn("使用者 {} 可能不存在或已被刪除", userId);
+            }
+            throw e;
+        } catch (Exception e) {
+            log.error("刪除使用者 {} 時發生未預期錯誤: {}", userId, e.getMessage(), e);
+            throw e;
+        }
+    }
+
     private String getAccessToken() throws Exception {
         String url = "https://login.microsoftonline.com/" + tenantId + "/oauth2/v2.0/token";
 
@@ -122,16 +200,23 @@ public class AzureADServiceImpl implements AzureADService {
     }
 
     private String getUserIdByEmail(String userEmail) throws Exception {
-        String accessToken = getAccessToken();
-        String url = "https://graph.microsoft.com/v1.0/users/" + userEmail;
-
-        HttpHeaders headers = new HttpHeaders();
-        headers.setBearerAuth(accessToken);
-        headers.setContentType(MediaType.APPLICATION_JSON);
-
-        HttpEntity<?> entity = new HttpEntity<>(headers);
-
+        log.info("嘗試通過電子郵件 {} 獲取用戶 ID", userEmail);
+        if (userEmail == null || userEmail.trim().isEmpty()) {
+            log.error("電子郵件地址為空，無法獲取用戶 ID");
+            return null;
+        }
+        
         try {
+            String accessToken = getAccessToken();
+            String url = "https://graph.microsoft.com/v1.0/users/" + userEmail;
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.setBearerAuth(accessToken);
+            headers.setContentType(MediaType.APPLICATION_JSON);
+
+            HttpEntity<?> entity = new HttpEntity<>(headers);
+            log.debug("發送請求至 Azure AD Graph API: {}", url);
+
             ResponseEntity<String> response = restTemplate.exchange(
                     url,
                     HttpMethod.GET,
@@ -142,13 +227,23 @@ public class AzureADServiceImpl implements AzureADService {
                 String jsonResponse = response.getBody();
                 ObjectMapper mapper = new ObjectMapper();
                 JsonNode rootNode = mapper.readTree(jsonResponse);
-                return rootNode.path("id").asText();
+                String userId = rootNode.path("id").asText();
+                log.info("成功獲取用戶 ID: {} 對應電子郵件: {}", userId, userEmail);
+                return userId;
             } else {
-                log.info("Error fetching user ID: " + response.getStatusCode());
+                log.error("獲取用戶 ID 失敗，HTTP狀態碼: {}", response.getStatusCode());
                 return null;
             }
         } catch (HttpClientErrorException e) {
-            log.info("Error fetching user ID for email {}: {}", userEmail, e.getMessage());
+            if (e.getStatusCode() == HttpStatus.NOT_FOUND) {
+                log.warn("用戶 {} 在 Azure AD 中不存在", userEmail);
+            } else {
+                log.error("獲取電子郵件 {} 的用戶 ID 時發生 HTTP 錯誤: {} - {}", 
+                        userEmail, e.getStatusCode(), e.getResponseBodyAsString());
+            }
+            return null;
+        } catch (Exception e) {
+            log.error("獲取電子郵件 {} 的用戶 ID 時發生未預期錯誤: {}", userEmail, e.getMessage(), e);
             return null;
         }
     }
@@ -187,6 +282,12 @@ public class AzureADServiceImpl implements AzureADService {
     }
 
     private void setUsageLocation(String userId, String usageLocation) {
+        log.info("開始設置用戶 {} 的使用地點為 {}", userId, usageLocation);
+        if (userId == null || userId.trim().isEmpty()) {
+            log.error("用戶 ID 為空，無法設置使用地點");
+            return;
+        }
+        
         try {
             String accessToken = getAccessToken();
             String url = "https://graph.microsoft.com/v1.0/users/" + userId;
@@ -199,6 +300,7 @@ public class AzureADServiceImpl implements AzureADService {
             bodyMap.put("usageLocation", usageLocation);
 
             HttpEntity<Map<String, String>> entity = new HttpEntity<>(bodyMap, headers);
+            log.debug("發送 PATCH 請求至 Azure AD Graph API: {}", url);
 
             ResponseEntity<Void> response = restTemplate.exchange(
                     url,
@@ -207,12 +309,19 @@ public class AzureADServiceImpl implements AzureADService {
                     Void.class);
 
             if (response.getStatusCode() == HttpStatus.NO_CONTENT) {
-                log.info("Usage location set to {} for user {}", usageLocation, userId);
+                log.info("成功設置用戶 {} 的使用地點為 {}", userId, usageLocation);
             } else {
-                log.info("Error setting usage location: {}", response.getStatusCode());
+                log.error("設置使用地點失敗，HTTP狀態碼: {}", response.getStatusCode());
+            }
+        } catch (HttpClientErrorException e) {
+            if (e.getStatusCode() == HttpStatus.NOT_FOUND) {
+                log.warn("用戶 {} 在 Azure AD 中不存在，無法設置使用地點", userId);
+            } else {
+                log.error("設置用戶 {} 的使用地點時發生 HTTP 錯誤: {} - {}", 
+                        userId, e.getStatusCode(), e.getResponseBodyAsString());
             }
         } catch (Exception e) {
-            log.info("Error setting usage location for user {}: {}", userId, e.getMessage());
+            log.error("設置用戶 {} 的使用地點時發生未預期錯誤: {}", userId, e.getMessage(), e);
         }
     }
 
