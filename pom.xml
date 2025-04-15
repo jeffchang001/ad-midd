@@ -104,6 +104,11 @@
 			<artifactId>spring-boot-starter-test</artifactId>
 			<scope>test</scope>
 		</dependency>
+
+		<dependency>
+			<groupId>org.hibernate.validator</groupId>
+			<artifactId>hibernate-validator</artifactId>
+		</dependency>
 	</dependencies>
 
 	<build>
@@ -119,6 +124,7 @@
 							<artifactId>lombok</artifactId>
 						</exclude>
 					</excludes>
+					<mainClass>com.sogo.ad.midd.AdMiddApplication</mainClass> <!-- Main Class路徑 -->
 				</configuration>
 			</plugin>
 			<plugin>

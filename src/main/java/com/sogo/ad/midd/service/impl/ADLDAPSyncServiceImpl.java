@@ -744,22 +744,37 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         // 確保所有父 OU 存在
         ensureOUStructure(ctx, dn, organization);
 
-        // 創建組織屬性
-        Attributes attrs = new BasicAttributes();
-        Attribute objectClass = new BasicAttribute("objectClass");
-        objectClass.add("top");
-        objectClass.add("organizationalUnit");
-        attrs.put(objectClass);
+        // 檢查組織是否已經被 ensureOUStructure 創建
+        try {
+            ctx.lookup(dn);
+            log.info("組織已存在，只更新屬性: {}", dn);
+            
+            // 更新屬性
+            ModificationItem[] mods = new ModificationItem[1];
+            mods[0] = new ModificationItem(DirContext.REPLACE_ATTRIBUTE,
+                    new BasicAttribute("description", "orgCode=" + organization.getOrgCode()));
+            ctx.modifyAttributes(dn, mods);
+            
+            log.info("成功更新組織屬性: {}", dn);
+        } catch (NameNotFoundException e) {
+            // 組織不存在，創建它
+            // 創建組織屬性
+            Attributes attrs = new BasicAttributes();
+            Attribute objectClass = new BasicAttribute("objectClass");
+            objectClass.add("top");
+            objectClass.add("organizationalUnit");
+            attrs.put(objectClass);
 
-        // 添加組織名稱
-        attrs.put("ou", organization.getOrgName());
+            // 添加組織名稱
+            attrs.put("ou", organization.getOrgName());
 
-        // 添加描述屬性，存儲 orgCode 以便後續查詢
-        attrs.put("description", "orgCode=" + organization.getOrgCode());
+            // 添加描述屬性，存儲 orgCode 以便後續查詢
+            attrs.put("description", "orgCode=" + organization.getOrgCode());
 
-        // 創建組織單位
-        ctx.createSubcontext(dn, attrs);
-        log.info("成功創建組織: {}", dn);
+            // 創建組織單位
+            ctx.createSubcontext(dn, attrs);
+            log.info("成功創建組織: {}", dn);
+        }
     }
 
     /**
@@ -794,11 +809,11 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         }
         log.debug("OU 列表: {}", ouList);
 
-        // 從基礎 DN 開始，確保每一級 OU 都存在
+        // 因為 buildOrganizationDn 是從最高層級到最低層級排序，
+        // 但 DN 格式是從最低層級到最高層級，所以 ouList 實際上是從最低層級到最高層級
+        // 我們需要從最高層級開始建立，所以需要反向遍歷 ouList
         Name currentDn = new LdapName(ldapBaseDn);
-        // 由於 buildOrganizationDn 現在是從最高層級到最低層級排序，
-        // 所以這裡應該從第一個元素開始處理（從 0 到 ouList.size() - 1）
-        for (int i = 0; i < ouList.size(); i++) {
+        for (int i = ouList.size() - 1; i >= 0; i--) {
             String ou = ouList.get(i);
             currentDn.add("OU=" + ou);
 
@@ -818,7 +833,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
                 ouAttrs.put("ou", ou);
 
                 // 只有最後一級的 OU 才添加 orgCode 描述，父層級 OU 不添加
-                if (i == ouList.size() - 1) {
+                if (i == 0) {
                     ouAttrs.put("description", "orgCode=" + organization.getOrgCode());
                 }
 
@@ -844,12 +859,20 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         List<ModificationItem> modItems = new ArrayList<>();
 
         // 處理組織名稱變更 (特殊處理，需要重命名 OU)
-        if (updatedFields.containsKey("OrgName")) {
-            String newName = updatedFields.get("OrgName");
-            log.debug("需要更新組織名稱為: {}", newName);
+        // 不區分大小寫檢查 orgName 或 OrgName
+        String orgNameValue = null;
+        for (Map.Entry<String, String> entry : updatedFields.entrySet()) {
+            if ("orgname".equalsIgnoreCase(entry.getKey())) {
+                orgNameValue = entry.getValue();
+                break;
+            }
+        }
+        
+        if (orgNameValue != null) {
+            log.debug("需要更新組織名稱為: {}", orgNameValue);
 
             // 變更 OU 的 RDN
-            Name newDn = getNewDnWithOUName(dn, newName);
+            Name newDn = getNewDnWithOUName(dn, orgNameValue);
             ctx.rename(dn, newDn);
             log.info("成功重命名組織: {} -> {}", dn, newDn);
 
@@ -858,11 +881,18 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         }
 
         // 處理描述變更
-        if (updatedFields.containsKey("Remark")) {
-            String newRemark = updatedFields.get("Remark");
+        String remarkValue = null;
+        for (Map.Entry<String, String> entry : updatedFields.entrySet()) {
+            if ("remark".equalsIgnoreCase(entry.getKey())) {
+                remarkValue = entry.getValue();
+                break;
+            }
+        }
+        
+        if (remarkValue != null) {
             modItems.add(new ModificationItem(DirContext.REPLACE_ATTRIBUTE,
                     new BasicAttribute("description", "orgCode=" + organization.getOrgCode() +
-                            ", " + newRemark)));
+                            ", " + remarkValue)));
         } else {
             // 確保 orgCode 在描述中正確設置
             modItems.add(new ModificationItem(DirContext.REPLACE_ATTRIBUTE,

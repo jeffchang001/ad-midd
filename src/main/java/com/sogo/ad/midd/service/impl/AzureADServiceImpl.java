@@ -46,6 +46,9 @@ public class AzureADServiceImpl implements AzureADService {
     private RestTemplate restTemplate;
 
     @Autowired
+    private APIEmployeeInfoServiceImpl apiEmployeeInfoService;
+
+    @Autowired
     private APIEmployeeInfoActionLogRepository employeeInfoActionLogRepository;
 
     @Autowired
@@ -64,6 +67,9 @@ public class AzureADServiceImpl implements AzureADService {
         for (APIEmployeeInfoActionLog actionLog : employeeInfoActionLogList) {
             APIEmployeeInfo employeeInfo = employeeInfoRepository.findByEmployeeNo(actionLog.getEmployeeNo());
             enableAADE1AccountProcessor(employeeInfo.getEmailAddress(), employeeInfo.getIdNoSuffix());
+            
+            // 將員工資訊同步至 Radar
+            apiEmployeeInfoService.addEmployeeInfoEmailToRadar(employeeInfo);
         }
     }
 
@@ -385,13 +391,13 @@ public class AzureADServiceImpl implements AzureADService {
 
             // 創建密碼配置對象
             Map<String, Object> passwordProfile = new HashMap<>();
-            passwordProfile.put("accountEnabled", Boolean.TRUE);
             passwordProfile.put("password", newPassword);
             passwordProfile.put("forceChangePasswordNextSignIn", forceChangePasswordNextSignIn);
 
             // 創建主體對象
             Map<String, Object> bodyMap = new HashMap<>();
             bodyMap.put("passwordProfile", passwordProfile);
+            bodyMap.put("accountEnabled", Boolean.TRUE);  // accountEnabled 應在外層，不是 passwordProfile 內
 
             HttpEntity<Map<String, Object>> entity = new HttpEntity<>(bodyMap, headers);
 
