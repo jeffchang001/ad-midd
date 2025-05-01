@@ -63,7 +63,7 @@ public class ADSyncController {
                 return ResponseEntity.noContent().build();
             }
             log.info("獲取到 {} 條 AD 同步數據", syncDataList.size());
-            processADSyncData(syncDataList);
+            processADSyncData(syncDataList, baseDate);
             return ResponseEntity.ok("同步成功完成");
         } catch (Exception e) {
             log.error("AD 同步過程中發生錯誤", e);
@@ -96,7 +96,7 @@ public class ADSyncController {
         return response.getBody();
     }
 
-    private void processADSyncData(List<ADEmployeeSyncDto> syncDataList) {
+    private void processADSyncData(List<ADEmployeeSyncDto> syncDataList, LocalDate baseDate) {
 
         // 處理員工同步
         for (ADEmployeeSyncDto adSyncDto : syncDataList) {
@@ -108,7 +108,7 @@ public class ADSyncController {
                     log.info("處理同步數據, 員工編號: {}, 組織名稱: {}",
                             adSyncDto.getEmployeeNo(), adSyncDto.getOrgHierarchyDto().get(0).getOrgName());
 
-                    adldapSyncService.syncEmployeeToAD(adSyncDto);
+                    adldapSyncService.syncEmployeeToAD(adSyncDto, baseDate);
                 }
 
             } catch (NamingException e) {

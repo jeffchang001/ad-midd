@@ -3,6 +3,7 @@ package com.sogo.ad.midd.service.impl;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Hashtable;
@@ -74,7 +75,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
     private APIEmployeeInfoActionLogRepository employeeInfoActionLogRepository;
 
     @Override
-    public void syncEmployeeToAD(ADEmployeeSyncDto employeeData) throws Exception {
+    public void syncEmployeeToAD(ADEmployeeSyncDto employeeData, LocalDate baseDate) throws Exception {
         log.info("employeeNo: {}", employeeData.getEmployeeNo());
         APIEmployeeInfo employee = employeeData.getEmployeeInfo();
         String action = employeeData.getAction();
@@ -87,18 +88,19 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         switch (action) {
             case "C":
                 log.debug("創建新員工: {}", employee.getEmployeeNo());
-                createEmployeeToDB(employeeData);
-                // createEmployeeToLDAP(dn, employee);
                 createEmployeeByPowerShell(dn, employee);
+                createEmployeeToDB(employeeData);
                 break;
             case "U":
                 log.debug("更新員工資訊: {}", employee.getEmployeeNo());
                 ctx = getLdapContext();
                 updateEmployee(ctx, employee, employeeData.getUpdatedFields());
+                updateEmployeeToDB(employeeData);
                 break;
             case "D":
                 log.debug("停用員工: {}", employee.getEmployeeNo());
                 disableADAccount(dn);
+                deleteEmployeeToDB(employeeData, baseDate);
                 break;
             default:
                 log.error("未知的操作類型: {}", action);
@@ -119,6 +121,10 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         // env.put(Context.REFERRAL, "follow");
         // env.put("java.naming.ldap.version", "3");
         // env.put(Context.SECURITY_PROTOCOL, "ssl");
+
+        // 添加超時設置，防止連接懸掛
+        env.put("com.sun.jndi.ldap.connect.timeout", "5000");
+        env.put("com.sun.jndi.ldap.read.timeout", "10000");
 
         LdapContext ctx = new InitialLdapContext(env, null);
 
@@ -196,30 +202,32 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
                         handleOrganizationChange(ctx, employee, dn, updatedFields.get("formulaOrgCode"));
                     }
 
-                    // 處理啟用狀態變更 - 如果 employedStatus 從非 1 變為 1，需要啟用帳號
+                    // 處理啟用狀態變更 - 如果 employedStatus 從 3 變為 1，需要啟用帳號, 從 2 變為 1，則不需要改變
                     if (employedStatusChanged) {
                         String newStatus = updatedFields.get("employedStatus");
-                        if ("1".equals(newStatus)) {
-                            log.info("員工狀態變更為啟用，啟用 AD 帳號: {}", employee.getEmployeeNo());
+                        String oldStatus = updatedFields.get("oldValue");
+                        if ("1".equals(newStatus) && "3".equals(oldStatus)) {
+                            log.info("員工狀態變更(3->1)為啟用，啟用 AD 帳號: {}", employee.getEmployeeNo());
                             enableADAccount(ctx, new LdapName(dn));
 
                             // 重新啟用 Azure AD E1 帳號
                             try {
-                                
-
                                 log.info("重新啟用員工 Azure AD E1 帳號: {}", employee.getEmployeeNo());
                                 azureADService.enableAADE1AccountProcessor(employee.getEmailAddress(),
                                         employee.getIdNoSuffix());
                             } catch (Exception e) {
                                 log.error("重新啟用 Azure AD E1 帳號失敗: {}", e.getMessage(), e);
                             }
+                        } else if ("1".equals(newStatus) && "2".equals(oldStatus)) {
+                            log.info("員工狀態變更為(2->1)啟用，啟用 AD 帳號: {}", employee.getEmployeeNo());
+                            enableADAccount(ctx, new LdapName(dn));
                         } else if ("2".equals(newStatus)) {
                             log.info("員工狀態變更為留停，停用 AD 帳號: {}", employee.getEmployeeNo());
                             disableADAccount(new LdapName(dn));
                         }
                     }
 
-                    // 處理一般屬性更新 (原有邏輯)
+                    // 處理一般屬性更新 - 這裡是需要主要修改的部分
                     for (Map.Entry<String, String> entry : updatedFields.entrySet()) {
                         String key = entry.getKey();
                         // 跳過 formulaOrgCode 和 employedStatus，因為已單獨處理
@@ -231,17 +239,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
                         String value = entry.getValue();
 
                         if (ldapAttribute != null && value != null && !value.trim().isEmpty()) {
-                            ModificationItem[] mods = new ModificationItem[] {
-                                    new ModificationItem(DirContext.REPLACE_ATTRIBUTE,
-                                            new BasicAttribute(ldapAttribute, value.trim()))
-                            };
-
-                            try {
-                                ctx.modifyAttributes(dn, mods);
-                                log.info("成功更新屬性: {} = {}", ldapAttribute, value.trim());
-                            } catch (NamingException e) {
-                                log.error("更新屬性 {} 時發生錯誤: {}", ldapAttribute, e.getMessage());
-                            }
+                            updateSingleAttribute(ctx, dn, ldapAttribute, value.trim(), employee.getEmployeeNo());
                         }
                     }
                 }
@@ -262,6 +260,209 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         } catch (NamingException | IOException e) {
             log.error("LDAP 操作失敗: {}", e.getMessage());
         }
+    }
+
+    // 新增一個方法專門處理單個屬性的更新
+    private void updateSingleAttribute(LdapContext ctx, String dn, String attributeName, String attributeValue,
+            String employeeNo) {
+        log.debug("準備更新屬性 {} 為 {}, 員工編號: {}", attributeName, attributeValue, employeeNo);
+
+        // 擴展特殊用戶列表，進一步識別面臨屬性更新問題的用戶
+        boolean isSpecialUser = "654323".equals(employeeNo) ||
+                (dn != null && dn.contains("總務課/忠孝"));
+
+        // 特殊屬性標誌 - 對 extension 屬性總是使用 PowerShell
+        boolean isSpecialAttribute = "extension".equals(attributeName);
+
+        // 如果是特殊用戶或特殊屬性，優先使用 PowerShell
+        if (isSpecialUser || isSpecialAttribute) {
+            try {
+                updateAttributeWithPowerShell(employeeNo, attributeName, attributeValue);
+                return; // 如果成功使用 PowerShell 更新，直接返回
+            } catch (Exception e) {
+                log.warn("使用 PowerShell 更新特殊用戶屬性失敗，嘗試使用標準 LDAP 方法: {}", e.getMessage());
+                // 失敗後繼續使用標準 LDAP 方法
+            }
+        }
+
+        try {
+            // 對所有用戶使用「先刪除後添加」的方式更新屬性
+            try {
+                // 步驟1: 嘗試刪除現有屬性（不指定值，刪除所有值）
+                ModificationItem[] deleteMods = new ModificationItem[1];
+                deleteMods[0] = new ModificationItem(DirContext.REMOVE_ATTRIBUTE,
+                        new BasicAttribute(attributeName));
+                try {
+                    ctx.modifyAttributes(dn, deleteMods);
+                } catch (NamingException ne) {
+                    // 忽略刪除不存在屬性的錯誤，僅記錄日誌
+                    if (ne.getMessage().contains("LDAP: error code 16") ||
+                            ne.getMessage().contains("NO_ATTRIBUTE_OR_VALUE")) {
+                        log.debug("屬性 {} 不存在或為空，將直接添加，員工編號: {}",
+                                attributeName, employeeNo);
+                    } else {
+                        // 其它錯誤則拋出以便後續處理
+                        throw ne;
+                    }
+                }
+
+                // 步驟2: 添加新的屬性值
+                ModificationItem[] addMods = new ModificationItem[1];
+                addMods[0] = new ModificationItem(DirContext.ADD_ATTRIBUTE,
+                        new BasicAttribute(attributeName, attributeValue));
+                ctx.modifyAttributes(dn, addMods);
+
+                log.info("成功更新屬性: {} = {}, 員工編號: {}",
+                        attributeName, attributeValue, employeeNo);
+
+            } catch (NamingException e) {
+                // 處理更新失敗的情況
+                if (e.getMessage().contains("LDAP: error code 1")) {
+                    // 服務錯誤（error code 1），嘗試重試
+                    handleAttributeUpdateRetry(ctx, dn, attributeName, attributeValue, employeeNo);
+                } else {
+                    log.error("更新屬性 {} 時發生錯誤: {}, 員工編號: {}",
+                            attributeName, e.getMessage(), employeeNo);
+                }
+            }
+        } catch (Exception e) {
+            log.error("更新屬性過程中發生未捕獲的異常: {}, 員工編號: {}",
+                    e.getMessage(), employeeNo, e);
+        }
+    }
+
+    // 處理屬性更新重試
+    private void handleAttributeUpdateRetry(LdapContext ctx, String dn, String attributeName,
+            String attributeValue, String employeeNo) {
+        log.warn("LDAP 伺服器錯誤 (error code 1)，嘗試延遲後重試: {}, 員工編號: {}",
+                attributeName, employeeNo);
+
+        boolean success = false;
+        // 使用指數退避策略，基本等待時間為 1 秒
+        for (int retryCount = 1; retryCount <= 3 && !success; retryCount++) {
+            try {
+                // 指數退避: 1秒, 2秒, 4秒
+                int waitTime = (int) Math.pow(2, retryCount - 1) * 1000;
+                Thread.sleep(waitTime);
+
+                // 嘗試重新連接 LDAP 以避免使用過期連接
+                if (retryCount > 1) {
+                    try {
+                        ctx.close();
+                        ctx = getLdapContext();
+                    } catch (NamingException e) {
+                        log.error("重新連接 LDAP 失敗: {}", e.getMessage());
+                        continue; // 連接失敗，繼續下一次重試
+                    }
+                }
+
+                // 再次嘗試「先刪除後添加」操作
+                try {
+                    // 刪除現有屬性（忽略可能的錯誤）
+                    try {
+                        ModificationItem[] deleteMods = new ModificationItem[1];
+                        deleteMods[0] = new ModificationItem(DirContext.REMOVE_ATTRIBUTE,
+                                new BasicAttribute(attributeName));
+                        ctx.modifyAttributes(dn, deleteMods);
+                    } catch (NamingException ne) {
+                        // 忽略刪除時的錯誤
+                        log.debug("重試過程中刪除屬性 {} 時發生錯誤（可能屬性不存在），忽略: {}",
+                                attributeName, ne.getMessage());
+                    }
+
+                    // 添加新屬性
+                    ModificationItem[] addMods = new ModificationItem[1];
+                    addMods[0] = new ModificationItem(DirContext.ADD_ATTRIBUTE,
+                            new BasicAttribute(attributeName, attributeValue));
+                    ctx.modifyAttributes(dn, addMods);
+
+                    log.info("第{}次重試成功更新屬性: {} = {}, 員工編號: {}",
+                            retryCount, attributeName, attributeValue, employeeNo);
+                    success = true;
+
+                } catch (NamingException ne) {
+                    if (retryCount == 3) {
+                        log.error("已重試3次，仍無法更新屬性 {}，放棄此次更新: {}, 員工編號: {}",
+                                attributeName, ne.getMessage(), employeeNo);
+
+                        // 最後一次重試失敗，嘗試使用 PowerShell 作為備選方案
+                        if (!"654323".equals(employeeNo)) { // 確保不是已經嘗試過 PowerShell 的特殊用戶
+                            try {
+                                updateAttributeWithPowerShell(employeeNo, attributeName, attributeValue);
+                            } catch (Exception pe) {
+                                log.error("使用 PowerShell 更新屬性 {} 也失敗: {}, 員工編號: {}",
+                                        attributeName, pe.getMessage(), employeeNo);
+                            }
+                        }
+                    } else {
+                        log.warn("第{}次重試更新屬性 {} 失敗，將再次嘗試: {}, 員工編號: {}",
+                                retryCount, attributeName, ne.getMessage(), employeeNo);
+                    }
+                }
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                log.error("重試等待被中斷, 員工編號: {}", employeeNo, ie);
+                break;
+            } catch (Exception ge) {
+                log.error("重試過程中發生未預期錯誤: {}, 員工編號: {}",
+                        ge.getMessage(), employeeNo, ge);
+                break;
+            }
+        }
+    }
+
+    // 使用 PowerShell 更新屬性
+    private void updateAttributeWithPowerShell(String employeeNo, String attributeName, String attributeValue)
+            throws Exception {
+        log.info("嘗試使用 PowerShell 更新屬性 {}, 員工編號: {}", attributeName, employeeNo);
+
+        StringBuilder powershellCmd = new StringBuilder();
+        powershellCmd.append("Import-Module ActiveDirectory; ");
+
+        // 根據不同的屬性類型選擇不同的 PowerShell 命令
+        switch (attributeName) {
+            case "mail":
+                powershellCmd.append("Set-ADUser ").append(employeeNo)
+                        .append(" -EmailAddress '").append(attributeValue).append("'");
+                break;
+            case "telephoneNumber":
+                powershellCmd.append("Set-ADUser ").append(employeeNo)
+                        .append(" -OfficePhone '").append(attributeValue).append("'");
+                break;
+            case "otherTelephone":
+                // 分機號碼處理 - 先清除再添加
+                powershellCmd.append("Set-ADUser ").append(employeeNo)
+                        .append(" -Clear otherTelephone; ");
+                powershellCmd.append("Set-ADUser ").append(employeeNo)
+                        .append(" -Add @{otherTelephone='").append(attributeValue).append("'}");
+                break;
+            case "extension":
+                // 使用 ipPhone 屬性來存儲分機號
+                powershellCmd.append("Set-ADUser ").append(employeeNo)
+                        .append(" -Replace @{ipPhone='").append(attributeValue).append("'}");
+                break;
+            case "mobile":
+                powershellCmd.append("Set-ADUser ").append(employeeNo)
+                        .append(" -MobilePhone '").append(attributeValue).append("'");
+                break;
+            case "displayName":
+                powershellCmd.append("Set-ADUser ").append(employeeNo)
+                        .append(" -DisplayName '").append(attributeValue).append("'");
+                break;
+            case "title":
+                powershellCmd.append("Set-ADUser ").append(employeeNo)
+                        .append(" -Title '").append(attributeValue).append("'");
+                break;
+            default:
+                throw new IllegalArgumentException("不支持通過 PowerShell 更新的屬性類型: " + attributeName);
+        }
+
+        String result = executePowerShellCommand(powershellCmd.toString());
+        if (result != null && !result.trim().isEmpty()) {
+            log.debug("PowerShell 執行結果: {}", result);
+        }
+
+        log.info("成功使用 PowerShell 更新屬性 {}, 員工編號: {}", attributeName, employeeNo);
     }
 
     /**
@@ -319,6 +520,10 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
     }
 
     private String mapFieldToLdapAttribute(String field) {
+        if (field == null) {
+            return null;
+        }
+
         switch (field.toLowerCase()) {
             case "fullname":
                 return "displayName";
@@ -327,11 +532,18 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
             case "officephone":
                 return "telephoneNumber";
             case "extno":
-                return "extension";
+                // 將分機號映射為 otherTelephone 而不是 extension 屬性
+                return "otherTelephone"; // 使用 AD 中支持的屬性
             case "mobilephoneno":
                 return "mobile";
             case "jobtitlename":
                 return "title";
+            // 添加對特定字段的處理，以避免顯示未知字段映射的警告
+            case "datamodifieddate":
+            case "datamodifieduser":
+            case "employedstatus": // 已在單獨的邏輯中處理
+            case "formulaorgcode": // 已在單獨的邏輯中處理
+                return null; // 直接返回 null，不進行映射
             default:
                 log.info("未知的字段映射: {}", field);
                 return null;
@@ -352,6 +564,63 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
                         null));
 
         log.info("成功創建員工: {}", employeeData.getEmployeeInfo().getEmployeeNo());
+    }
+
+    private void deleteEmployeeToDB(ADEmployeeSyncDto employeeData, LocalDate baseDate) {
+        List<APIEmployeeInfoActionLog> apiEmployeeInfoActionLogs = employeeInfoActionLogRepository
+                .findByEmployeeNoAndActionAndCreatedDate(employeeData.getEmployeeInfo().getEmployeeNo(), "D",
+                        baseDate.toString());
+        if (!apiEmployeeInfoActionLogs.isEmpty()) {
+            log.info("刪除指令已存在於數據庫: {}", employeeData.getEmployeeInfo().getEmployeeNo());
+            return;
+        }
+
+        APIEmployeeInfo existingEmployee = employeeInfoRepository
+                .findByEmployeeNo(employeeData.getEmployeeInfo().getEmployeeNo());
+
+        APIEmployeeInfo apiEmployeeInfo = employeeData.getEmployeeInfo();
+
+        // 複製 apiEmployeeInfo 的資料到 existingEmployee
+        existingEmployee.setFullName(apiEmployeeInfo.getFullName());
+        existingEmployee.setEmailAddress(apiEmployeeInfo.getEmailAddress());
+        existingEmployee.setOfficePhone(apiEmployeeInfo.getOfficePhone());
+        existingEmployee.setExtNo(apiEmployeeInfo.getExtNo());
+        existingEmployee.setMobilePhoneNo(apiEmployeeInfo.getMobilePhoneNo());
+        existingEmployee.setJobTitleName(apiEmployeeInfo.getJobTitleName());
+        existingEmployee.setFormulaOrgCode(apiEmployeeInfo.getFormulaOrgCode());
+        existingEmployee.setEmployedStatus(apiEmployeeInfo.getEmployedStatus());
+        existingEmployee.setDataModifiedDate(apiEmployeeInfo.getDataModifiedDate());
+        existingEmployee.setDataModifiedUser(apiEmployeeInfo.getDataModifiedUser());
+
+        employeeInfoRepository.save(existingEmployee);
+        employeeInfoActionLogRepository.save(
+                new APIEmployeeInfoActionLog(employeeData.getEmployeeInfo().getEmployeeNo(), "D", "employeeNo", null,
+                        null));
+
+        log.info("成功刪除(停用)員工: {}", employeeData.getEmployeeInfo().getEmployeeNo());
+    }
+
+    private void updateEmployeeToDB(ADEmployeeSyncDto employeeData) {
+        APIEmployeeInfo existingEmployee = employeeInfoRepository
+                .findByEmployeeNo(employeeData.getEmployeeInfo().getEmployeeNo());
+
+        APIEmployeeInfo apiEmployeeInfo = employeeData.getEmployeeInfo();
+
+        // 複製 apiEmployeeInfo 的資料到 existingEmployee
+        existingEmployee.setFullName(apiEmployeeInfo.getFullName());
+        existingEmployee.setEmailAddress(apiEmployeeInfo.getEmailAddress());
+        existingEmployee.setOfficePhone(apiEmployeeInfo.getOfficePhone());
+        existingEmployee.setExtNo(apiEmployeeInfo.getExtNo());
+        existingEmployee.setMobilePhoneNo(apiEmployeeInfo.getMobilePhoneNo());
+        existingEmployee.setJobTitleName(apiEmployeeInfo.getJobTitleName());
+        existingEmployee.setFormulaOrgCode(apiEmployeeInfo.getFormulaOrgCode());
+        existingEmployee.setEmployedStatus(apiEmployeeInfo.getEmployedStatus());
+        existingEmployee.setDataModifiedDate(apiEmployeeInfo.getDataModifiedDate());
+        existingEmployee.setDataModifiedUser(apiEmployeeInfo.getDataModifiedUser());
+
+        employeeInfoRepository.save(existingEmployee);
+
+        log.info("成功更新員工: {}", employeeData.getEmployeeInfo().getEmployeeNo());
     }
 
     /**
@@ -485,6 +754,11 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
 
             if (employee.getJobTitleName() != null && !employee.getJobTitleName().trim().isEmpty()) {
                 powershellCmd.append("-Title '").append(employee.getJobTitleName()).append("' ");
+            }
+
+            // 添加分機號碼設定 (otherTelephone)
+            if (employee.getExtNo() != null && !employee.getExtNo().trim().isEmpty()) {
+                powershellCmd.append("-OtherAttributes @{otherTelephone='").append(employee.getExtNo()).append("'} ");
             }
 
             // 設定密碼和啟用帳號
@@ -710,7 +984,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
     /**
      * 建構組織的 LDAP DN
      *
-     * @param orgCode     組織代碼
+     * @param orgCode      組織代碼
      * @param orgHierarchy 組織層級資訊
      * @return 組織的 LDAP DN
      */
@@ -748,13 +1022,13 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         try {
             ctx.lookup(dn);
             log.info("組織已存在，只更新屬性: {}", dn);
-            
+
             // 更新屬性
             ModificationItem[] mods = new ModificationItem[1];
             mods[0] = new ModificationItem(DirContext.REPLACE_ATTRIBUTE,
                     new BasicAttribute("description", "orgCode=" + organization.getOrgCode()));
             ctx.modifyAttributes(dn, mods);
-            
+
             log.info("成功更新組織屬性: {}", dn);
         } catch (NameNotFoundException e) {
             // 組織不存在，創建它
@@ -867,7 +1141,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
                 break;
             }
         }
-        
+
         if (orgNameValue != null) {
             log.debug("需要更新組織名稱為: {}", orgNameValue);
 
@@ -888,7 +1162,7 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
                 break;
             }
         }
-        
+
         if (remarkValue != null) {
             modItems.add(new ModificationItem(DirContext.REPLACE_ATTRIBUTE,
                     new BasicAttribute("description", "orgCode=" + organization.getOrgCode() +

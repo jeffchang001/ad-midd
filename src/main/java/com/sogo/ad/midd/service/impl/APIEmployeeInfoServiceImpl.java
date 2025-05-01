@@ -64,7 +64,7 @@ public class APIEmployeeInfoServiceImpl implements APIEmployeeInfoService {
             // 準備請求頭
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.set("Authorization", radarAPIToken);
+            headers.set("X-api-token", radarAPIToken);
             
             // 準備請求體
             Map<String, String> requestBody = new HashMap<>();
