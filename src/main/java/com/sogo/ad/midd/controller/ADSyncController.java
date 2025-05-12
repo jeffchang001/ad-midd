@@ -207,24 +207,39 @@ public class ADSyncController {
     }
 
     private void processADOrganizationSyncData(List<ADOrganizationSyncDto> syncDataList) {
-        // 處理組織同步
-        for (ADOrganizationSyncDto orgSyncDto : syncDataList) {
-            try {
-                if (orgSyncDto.getOrgHierarchyDto() == null || orgSyncDto.getOrgHierarchyDto().isEmpty()) {
-                    log.info("組織層級資訊為空, 組織代碼: {}", orgSyncDto.getOrgCode());
-                    continue;
-                } else {
-                    log.info("處理組織同步數據, 組織代碼: {}, 組織名稱: {}",
-                            orgSyncDto.getOrgCode(), orgSyncDto.getOrganization().getOrgName());
+        // 先處理 action 為 'U' 的組織資料
+        processOrganizationsByAction(syncDataList, "U");
+        
+        // 再處理 action 為 'C' 的組織資料
+        processOrganizationsByAction(syncDataList, "C");
+
+        // 再處理 action 為 'D' 的組織資料
+        processOrganizationsByAction(syncDataList, "D");
+    }
+
+    private void processOrganizationsByAction(List<ADOrganizationSyncDto> syncDataList, String action) {
+        syncDataList.stream()
+            .filter(dto -> action.equals(dto.getAction()))
+            .forEach(orgSyncDto -> {
+                try {
+                    if (orgSyncDto.getOrgHierarchyDto() == null || orgSyncDto.getOrgHierarchyDto().isEmpty()) {
+                        log.info("組織層級資訊為空, 組織代碼: {}", orgSyncDto.getOrgCode());
+                        return;
+                    }
+                    
+                    log.info("處理組織同步數據 [{}], 組織代碼: {}, 組織名稱: {}",
+                            action,
+                            orgSyncDto.getOrgCode(), 
+                            orgSyncDto.getOrganization().getOrgName());
 
                     adldapSyncService.syncOrganizationToAD(orgSyncDto);
+                    
+                } catch (NamingException e) {
+                    handleOrganizationSyncException("LDAP操作錯誤", orgSyncDto, e);
+                } catch (Exception e) {
+                    handleOrganizationSyncException("未預期的錯誤", orgSyncDto, e);
                 }
-            } catch (NamingException e) {
-                handleOrganizationSyncException("LDAP操作錯誤", orgSyncDto, e);
-            } catch (Exception e) {
-                handleOrganizationSyncException("未預期的錯誤", orgSyncDto, e);
-            }
-        }
+            });
     }
 
     private void handleOrganizationSyncException(String errorType, ADOrganizationSyncDto orgSyncDto, Exception e) {

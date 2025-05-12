@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.Hashtable;
 import java.util.List;
@@ -947,13 +948,13 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
                     if (existingOrg != null) {
                         // 更新現有組織
                         updateOrganization(ctx, new LdapName(existingOrg.getNameInNamespace()),
-                                organization, organizationData.getUpdatedFields());
+                                organization, organizationData);
                     } else {
                         log.warn("找不到要更新的組織: {}", organization.getOrgCode());
                         // 如果找不到，可以選擇創建
-                        Name orgDn = buildOrganizationDn(organization.getOrgCode(), orgHierarchy);
-                        log.info("組織不存在，將建立新組織，DN: {}", orgDn.toString());
-                        createOrganizationToAD(ctx, orgDn, organization, orgHierarchy);
+                        // Name orgDn = buildOrganizationDn(organization.getOrgCode(), orgHierarchy);
+                        // log.info("組織不存在，將建立新組織，DN: {}", orgDn.toString());
+                        // createOrganizationToAD(ctx, orgDn, organization, orgHierarchy);
                     }
                     break;
                 case "D":
@@ -1121,7 +1122,8 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
      * 更新組織
      */
     private void updateOrganization(LdapContext ctx, Name dn, APIOrganization organization,
-            Map<String, String> updatedFields) throws NamingException {
+            ADOrganizationSyncDto organizationData) throws NamingException {
+        Map<String, String> updatedFields = organizationData.getUpdatedFields();
         log.debug("更新組織: {}, 更新欄位: {}", organization.getOrgCode(), updatedFields);
 
         if (updatedFields == null || updatedFields.isEmpty()) {
@@ -1132,8 +1134,32 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         // 準備修改項
         List<ModificationItem> modItems = new ArrayList<>();
 
-        // 處理組織名稱變更 (特殊處理，需要重命名 OU)
-        // 不區分大小寫檢查 orgName 或 OrgName
+        // 處理組織架構與名稱變更
+        Name currentDn = dn;
+        boolean needRename = false;
+        Name newDn = currentDn;
+
+        // 檢查組織層級變更
+        if (organizationData.getOrgHierarchyDto() != null && !organizationData.getOrgHierarchyDto().isEmpty()) {
+            try {
+                // 根據現有 DN 分析當前組織架構
+                String currentDnStr = currentDn.toString();
+
+                // 構建新的 DN，基於 organizationData.getOrgHierarchyDto()
+                newDn = buildDnFromHierarchy(organizationData.getOrgHierarchyDto(), organization.getOrgName());
+                String newDnStr = newDn.toString();
+
+                // 比較當前 DN 和新 DN
+                if (!currentDnStr.equals(newDnStr)) {
+                    log.info("發現組織架構變更，需要搬移 OU。從: {} 到: {}", currentDnStr, newDnStr);
+                    needRename = true;
+                }
+            } catch (Exception e) {
+                log.error("分析組織架構變更時發生錯誤", e);
+            }
+        }
+
+        // 檢查組織名稱變更
         String orgNameValue = null;
         for (Map.Entry<String, String> entry : updatedFields.entrySet()) {
             if ("orgname".equalsIgnoreCase(entry.getKey())) {
@@ -1142,44 +1168,39 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
             }
         }
 
-        if (orgNameValue != null) {
+        // 如果只有名稱變更，但沒有層級變更
+        if (orgNameValue != null && !needRename) {
             log.debug("需要更新組織名稱為: {}", orgNameValue);
-
-            // 變更 OU 的 RDN
-            Name newDn = getNewDnWithOUName(dn, orgNameValue);
-            ctx.rename(dn, newDn);
-            log.info("成功重命名組織: {} -> {}", dn, newDn);
-
-            // 更新 dn 引用，指向新的 DN
-            dn = newDn;
+            newDn = getNewDnWithOUName(dn, orgNameValue);
+            needRename = true;
         }
 
-        // 處理描述變更
-        String remarkValue = null;
-        for (Map.Entry<String, String> entry : updatedFields.entrySet()) {
-            if ("remark".equalsIgnoreCase(entry.getKey())) {
-                remarkValue = entry.getValue();
-                break;
+        // 執行重命名/移動操作
+        if (needRename) {
+            try {
+                ctx.rename(currentDn, newDn);
+                log.info("成功重命名/搬移組織: {} -> {}", currentDn, newDn);
+                currentDn = newDn; // 更新當前 DN 為新的 DN
+            } catch (NamingException e) {
+                log.error("重命名/搬移組織時發生錯誤: {}", e.getMessage(), e);
+                throw e;
             }
         }
 
-        if (remarkValue != null) {
-            modItems.add(new ModificationItem(DirContext.REPLACE_ATTRIBUTE,
-                    new BasicAttribute("description", "orgCode=" + organization.getOrgCode() +
-                            ", " + remarkValue)));
-        } else {
-            // 確保 orgCode 在描述中正確設置
-            modItems.add(new ModificationItem(DirContext.REPLACE_ATTRIBUTE,
-                    new BasicAttribute("description", "orgCode=" + organization.getOrgCode())));
-        }
-
-        // 處理其他屬性...
+        // 確保 orgCode 在描述中正確設置
+        modItems.add(new ModificationItem(DirContext.REPLACE_ATTRIBUTE,
+                new BasicAttribute("description", "orgCode=" + organization.getOrgCode())));
 
         // 如果有屬性需要更新
         if (!modItems.isEmpty()) {
             ModificationItem[] mods = modItems.toArray(new ModificationItem[0]);
-            ctx.modifyAttributes(dn, mods);
-            log.info("成功更新組織屬性: {}", dn);
+            try {
+                ctx.modifyAttributes(currentDn, mods); // 注意：使用更新後的 currentDn
+                log.info("成功更新組織屬性: {}", currentDn);
+            } catch (NamingException e) {
+                log.error("更新組織屬性時發生錯誤: {}", e.getMessage(), e);
+                throw e;
+            }
         }
     }
 
@@ -1194,6 +1215,46 @@ public class ADLDAPSyncServiceImpl implements ADLDAPSyncService {
         return LdapNameBuilder.newInstance(parentDn)
                 .add("OU", newOUName)
                 .build();
+    }
+
+    /**
+     * 根據組織層級資料構建 LDAP DN
+     * 
+     * @param hierarchyDtoList 組織層級DTO列表
+     * @param orgName          組織名稱
+     * @return 構建的 DN
+     * @throws NamingException 命名異常
+     */
+    private Name buildDnFromHierarchy(List<OrganizationHierarchyDto> hierarchyDtoList, String orgName)
+            throws NamingException {
+        // 先排序層級，確保由上而下的順序
+        Collections.sort(hierarchyDtoList, new Comparator<OrganizationHierarchyDto>() {
+            @Override
+            public int compare(OrganizationHierarchyDto o1, OrganizationHierarchyDto o2) {
+                // 使用 orgLevel 欄位進行排序
+                return Integer.compare(o1.getOrgLevel(), o2.getOrgLevel());
+            }
+        });
+
+        // 建立基於 baseDn 的 DN 構建器
+        LdapName baseDn = new LdapName(ldapBaseDn);
+        LdapNameBuilder builder = LdapNameBuilder.newInstance(baseDn);
+
+        // 從最高層級（數字最小）到最低層級（數字最大）添加 OU
+        for (int i = hierarchyDtoList.size() - 1; i > 0; i--) {
+
+            OrganizationHierarchyDto hierarchyDto = hierarchyDtoList.get(i);
+            if (hierarchyDto.getOrgCode() != null && !hierarchyDto.getOrgCode().isEmpty()) {
+                builder.add("OU", hierarchyDto.getOrgName());
+            }
+        }
+
+        // 最後添加當前組織作為最底層 OU
+        builder.add("OU", orgName);
+
+        Name result = builder.build();
+        log.debug("buildDnFromHierarchy 構建的 DN: {}", result.toString());
+        return result;
     }
 
     /**
