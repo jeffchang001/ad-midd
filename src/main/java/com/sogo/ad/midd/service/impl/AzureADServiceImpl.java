@@ -67,9 +67,6 @@ public class AzureADServiceImpl implements AzureADService {
         for (APIEmployeeInfoActionLog actionLog : employeeInfoActionLogList) {
             APIEmployeeInfo employeeInfo = employeeInfoRepository.findByEmployeeNo(actionLog.getEmployeeNo());
             enableAADE1AccountProcessor(employeeInfo.getEmailAddress(), employeeInfo.getIdNoSuffix());
-            
-            // 將員工資訊同步至 Radar
-            apiEmployeeInfoService.addEmployeeInfoEmailToRadar(employeeInfo);
         }
     }
 
@@ -419,6 +416,23 @@ public class AzureADServiceImpl implements AzureADService {
                     userId, e.getStatusCode(), e.getResponseBodyAsString());
         } catch (Exception e) {
             log.error("重設用戶 {} 密碼時發生錯誤: {}", userId, e.getMessage());
+        }
+    }
+
+    @Override
+    public void syncEmployeeDataToRadar(String employeeNo, String baseDate) throws Exception {
+        List<APIEmployeeInfoActionLog> employeeInfoActionLogList = null;
+        if ("".equals(employeeNo) || employeeNo == null) {
+            employeeInfoActionLogList = employeeInfoActionLogRepository
+                    .findByAndActionAndCreatedDate("C", baseDate);
+        } else {
+            employeeInfoActionLogList = employeeInfoActionLogRepository
+                    .findByEmployeeNoAndActionAndCreatedDate(employeeNo, "C", baseDate);
+        }
+        for (APIEmployeeInfoActionLog actionLog : employeeInfoActionLogList) {
+            APIEmployeeInfo employeeInfo = employeeInfoRepository.findByEmployeeNo(actionLog.getEmployeeNo());
+            // 將員工資訊同步至 Radar
+            apiEmployeeInfoService.addEmployeeInfoEmailToRadar(employeeInfo);
         }
     }
 

@@ -246,4 +246,22 @@ public class ADSyncController {
         log.error("{}, 組織代碼: {}", errorType, orgSyncDto.getOrgCode(), e);
         // 可以選擇在這裡添加更多的錯誤處理邏輯，例如發送通知或記錄到數據庫
     }
+
+    @PostMapping("/employees/sync-employee-data-to-radar")
+    @Operation(summary = "同步email, 分機回 radar 系統", description = "取得指定同步日期的員工資訊, 同步email, 分機回 radar 系統")
+    @ApiResponse(responseCode = "200", description = "同步啟用同步email, 分機回 radar 系統成功")
+    @ApiResponse(responseCode = "400", description = "同步啟用同步email, 分機回 radar 系統失敗")
+    @ApiResponse(responseCode = "500", description = "內部伺服器錯誤")
+    public ResponseEntity<String> syncEmployeeDataToRadar(
+            @Parameter(description = "員工編號") @RequestParam(name = "employee-no", defaultValue = "") String employeeNo,
+            @Parameter(description = "基準日期：日期之後的資料", schema = @Schema(type = "string", format = "date", example = "2025-02-28")) @RequestParam(name = "base-date", required = true) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate baseDate) {
+        try {
+            azureADService.enableAADE1Account(employeeNo, baseDate.toString());
+
+            return ResponseEntity.ok("啟用員工 AAD E1 帳號授權成功");
+        } catch (Exception e) {
+            log.error("啟用員工 AAD E1 帳號授權過程中發生未知錯誤", e);
+            return ResponseEntity.internalServerError().body("啟用員工 AAD E1 帳號授權過程中發生未知錯誤");
+        }
+    }
 }

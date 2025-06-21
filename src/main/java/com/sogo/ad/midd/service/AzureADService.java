@@ -12,4 +12,6 @@ public interface AzureADService {
     
     void deleteAADE1AllAccountProcessor() throws Exception;
 
+    void syncEmployeeDataToRadar(String employeeNo, String baseDate) throws Exception;
+
 }
