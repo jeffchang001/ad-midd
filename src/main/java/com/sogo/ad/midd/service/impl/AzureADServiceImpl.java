@@ -66,6 +66,7 @@ public class AzureADServiceImpl implements AzureADService {
         }
         for (APIEmployeeInfoActionLog actionLog : employeeInfoActionLogList) {
             APIEmployeeInfo employeeInfo = employeeInfoRepository.findByEmployeeNo(actionLog.getEmployeeNo());
+            // 啟用 AAD E1 帳號授權
             enableAADE1AccountProcessor(employeeInfo.getEmailAddress(), employeeInfo.getIdNoSuffix());
         }
     }
@@ -82,6 +83,7 @@ public class AzureADServiceImpl implements AzureADService {
         }
         for (APIEmployeeInfoActionLog actionLog : employeeInfoActionLogList) {
             APIEmployeeInfo employeeInfo = employeeInfoRepository.findByEmployeeNo(actionLog.getEmployeeNo());
+            // 停用 AAD E1 帳號授權
             disableAADE1AccountProcessor(employeeInfo.getEmailAddress());
         }
     }
@@ -435,5 +437,4 @@ public class AzureADServiceImpl implements AzureADService {
             apiEmployeeInfoService.addEmployeeInfoEmailToRadar(employeeInfo);
         }
     }
-
 }

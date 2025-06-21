@@ -31,7 +31,7 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 @RestController
 @RequiredArgsConstructor
-@Tag(name = "Radar Data Sync", description = "提供從 Radar API 同步數據的功能")
+@Tag(name = "Radar Data Sync(只有成雲的人才可以點！！！)", description = "提供從 Radar API 同步數據的功能")
 public class RadarDataController {
 
     private final RestTemplate restTemplate;
